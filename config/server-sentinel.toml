@@ -1,0 +1,32 @@
+[server]
+name = "vm"
+environment = "production"
+
+[monitoring]
+normal_interval_seconds = 10
+investigation_interval_seconds = 1
+top_process_count = 8
+
+[thresholds]
+cpu_warning = 80.0
+cpu_critical = 90.0
+memory_warning = 80.0
+memory_critical = 90.0
+disk_warning = 80.0
+disk_critical = 90.0
+
+[incident]
+trigger_duration_seconds = 10
+pre_incident_seconds = 120
+post_recovery_seconds = 30
+recovery_duration_seconds = 5
+
+[storage]
+base_dir = "./data"
+
+[notification.email]
+enabled = false
+smtp_host = ""
+smtp_port = 0
+from_address = ""
+to_addresses = []

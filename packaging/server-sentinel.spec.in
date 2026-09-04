@@ -1,0 +1,75 @@
+Name:           server-sentinel
+Version:        @VERSION@
+Release:        1%{?dist}
+Summary:        Automated infrastructure incident investigation agent
+License:        Proprietary
+URL:            https://example.com/server-sentinel
+Source0:        %{name}-%{version}.tar.gz
+BuildArch:      x86_64
+Requires:       systemd
+
+%description
+ServerSentinel watches CPU, memory and disk on a Linux server. When a
+resource sustains a critical level, it automatically switches into a
+fast-sampling investigation mode, correlates the responsible process,
+scores a confident root cause, and writes a JSON + HTML incident report
+with no manual triage required.
+
+Config: /etc/server-sentinel/server-sentinel.toml
+Reports: /var/lib/server-sentinel/{incidents,reports}
+
+%prep
+%setup -q
+
+%build
+# Prebuilt release binary is provided as a source file; nothing to compile.
+
+%install
+rm -rf %{buildroot}
+mkdir -p %{buildroot}/usr/bin
+mkdir -p %{buildroot}/etc/server-sentinel
+mkdir -p %{buildroot}/usr/lib/systemd/system
+mkdir -p %{buildroot}/var/lib/server-sentinel/incidents
+mkdir -p %{buildroot}/var/lib/server-sentinel/reports
+
+install -m 755 server-sentinel %{buildroot}/usr/bin/server-sentinel
+install -m 644 server-sentinel.toml %{buildroot}/etc/server-sentinel/server-sentinel.toml
+install -m 644 server-sentinel.service %{buildroot}/usr/lib/systemd/system/server-sentinel.service
+
+%files
+/usr/bin/server-sentinel
+%config(noreplace) /etc/server-sentinel/server-sentinel.toml
+/usr/lib/systemd/system/server-sentinel.service
+%dir /var/lib/server-sentinel
+%dir /var/lib/server-sentinel/incidents
+%dir /var/lib/server-sentinel/reports
+
+%post
+if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload >/dev/null 2>&1 || true
+fi
+echo "server-sentinel installed. Review /etc/server-sentinel/server-sentinel.toml, then:"
+echo "  sudo systemctl enable --now server-sentinel"
+
+%preun
+if [ $1 -eq 0 ] && [ -d /run/systemd/system ]; then
+    systemctl --no-reload disable --now server-sentinel.service >/dev/null 2>&1 || true
+fi
+
+%postun
+if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload >/dev/null 2>&1 || true
+fi
+if [ $1 -ge 1 ]; then
+    systemctl try-restart server-sentinel.service >/dev/null 2>&1 || true
+fi
+if [ $1 -eq 0 ]; then
+    # Full removal (not an upgrade): drop stored incident history too.
+    rm -rf /var/lib/server-sentinel
+fi
+
+%changelog
+* Fri Sep 04 2026 ServerSentinel <support@example.com> - 0.1.0-1
+- Initial MVP release: Linux + Windows telemetry collection, threshold
+  detection, investigation mode, process correlation, root-cause scoring,
+  JSON/HTML incident reports, console + email notifications.

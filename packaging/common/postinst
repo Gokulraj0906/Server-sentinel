@@ -1,0 +1,10 @@
+#!/bin/sh
+set -e
+mkdir -p /var/lib/server-sentinel/incidents /var/lib/server-sentinel/reports
+chmod 750 /var/lib/server-sentinel
+if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload || true
+    echo "server-sentinel installed. Review /etc/server-sentinel/server-sentinel.toml, then:"
+    echo "  sudo systemctl enable --now server-sentinel"
+fi
+exit 0

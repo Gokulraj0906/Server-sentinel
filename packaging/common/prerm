@@ -1,0 +1,6 @@
+#!/bin/sh
+set -e
+if [ -d /run/systemd/system ]; then
+    systemctl stop server-sentinel 2>/dev/null || true
+fi
+exit 0

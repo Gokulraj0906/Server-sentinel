@@ -1,0 +1,40 @@
+[package]
+name = "server-sentinel"
+version = "0.1.0"
+edition = "2021"
+description = "Lightweight infrastructure monitoring & automated incident investigation agent"
+authors = ["ServerSentinel"]
+
+[[bin]]
+name = "server-sentinel"
+path = "src/main.rs"
+
+[dependencies]
+sysinfo = { version = "0.30", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+chrono = { version = "0.4", features = ["serde"] }
+anyhow = "1"
+thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "=1.10.0", features = ["v4", "serde"] }
+ctrlc = "3"
+clap = { version = "=4.5.20", features = ["derive"] }
+
+# The sandbox toolchain is pinned to rustc 1.75 (Ubuntu apt has no newer
+# rustc available). Several transitive deps have since bumped their MSRV
+# past what 1.75 supports (edition2024 etc). Pin the offending transitive
+# crates to the last versions that still build on 1.75; harmless for a
+# real deployment on a current toolchain, where these pins can be dropped.
+indexmap = "=2.2.6"
+hashbrown = "=0.14.5"
+getrandom = "=0.2.15"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
