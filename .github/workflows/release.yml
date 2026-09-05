@@ -6,10 +6,12 @@ name: Release packages
 #
 # NOTE: the Windows/MSI leg was authored without access to a Windows
 # machine to test it (it was written and validated in a Linux-only
-# sandbox — see the project README). The recipe below (cargo-wix +
-# WiX Toolset v3 via Chocolatey) is the standard, widely-used approach
-# for Rust projects, but do a test run (push a `v0.0.0-test` tag, or
-# trigger manually) before trusting it for a real release.
+# sandbox — see the project README). One real bug has already been found
+# and fixed from an actual CI run (see the comment on the "Build .msi"
+# step below: `cargo wix build` isn't a valid command, cargo-wix has no
+# "build" subcommand). If you hit another error, it means there's still
+# something in this recipe that wasn't caught without real Windows CI
+# access — send the log and it'll get fixed the same way.
 
 on:
   push:
@@ -61,9 +63,14 @@ jobs:
           Copy-Item README.md $dest/
           Compress-Archive -Path $dest -DestinationPath "$dest.zip"
 
-      - name: Install WiX Toolset v3
+      - name: Install WiX Toolset v3 (skipped if the runner already has one — windows-latest ships it preinstalled)
         shell: pwsh
-        run: choco install wixtoolset -y --no-progress
+        run: |
+          if (-not (Get-Command candle.exe -ErrorAction SilentlyContinue)) {
+            choco install wixtoolset -y --no-progress
+          } else {
+            Write-Host "WiX Toolset already present on this runner, skipping install."
+          }
 
       - name: Install cargo-wix
         run: cargo install cargo-wix --locked
@@ -72,14 +79,17 @@ jobs:
         shell: pwsh
         run: |
           if (-not (Test-Path wix/main.wxs)) {
-            cargo wix init
+            cargo wix init --force
           }
 
       - name: Build .msi
-        shell: pwsh
-        run: |
-          $env:Path += ";C:\Program Files (x86)\WiX Toolset v3.11\bin"
-          cargo wix build --nocapture
+        # NOTE: cargo-wix has no "build" subcommand — the bare `cargo wix`
+        # command *is* the build step (init/clean/sign are the only real
+        # subcommands). `cargo wix build` was an earlier mistake here: clap
+        # silently treated the literal word "build" as the positional path
+        # to a .wxs file, producing "Error[3] (Io): The 'build' path does
+        # not exist" since no file/folder named `build` exists in the repo.
+        run: cargo wix
 
       - uses: actions/upload-artifact@v4
         with:
