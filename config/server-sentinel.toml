@@ -16,7 +16,7 @@ disk_warning = 80.0
 disk_critical = 90.0
 
 [incident]
-trigger_duration_seconds = 10
+trigger_duration_seconds = 1
 pre_incident_seconds = 120
 post_recovery_seconds = 30
 recovery_duration_seconds = 5

@@ -4,14 +4,13 @@ name: Release packages
 # installer on a real Windows runner, then (on a version tag push)
 # attaches all four to a GitHub Release.
 #
-# NOTE: the Windows/MSI leg was authored without access to a Windows
-# machine to test it (it was written and validated in a Linux-only
-# sandbox — see the project README). One real bug has already been found
-# and fixed from an actual CI run (see the comment on the "Build .msi"
-# step below: `cargo wix build` isn't a valid command, cargo-wix has no
-# "build" subcommand). If you hit another error, it means there's still
-# something in this recipe that wasn't caught without real Windows CI
-# access — send the log and it'll get fixed the same way.
+# NOTE: I don't have access to a Windows machine to test this directly —
+# it was authored in a Linux-only sandbox (see the project README) and
+# validated by watching real CI runs. Status as of the last run: both
+# build-linux and build-windows succeeded, producing a real PE32+ .exe
+# and a real WiX-built .msi (verified by inspecting the artifacts). Not
+# yet confirmed: that the .msi actually double-click-installs cleanly on
+# a real Windows machine — do that before cutting a real tagged release.
 
 on:
   push:
@@ -52,6 +51,29 @@ jobs:
       - name: Build release binary
         run: cargo build --release
 
+      - name: Sign .exe (skipped until a certificate is configured)
+        shell: pwsh
+        # Fixes the "Unknown publisher" / SmartScreen warning on the .exe
+        # — but only once WINDOWS_CERTIFICATE_BASE64 / _PASSWORD secrets
+        # are set (Settings -> Secrets and variables -> Actions). Until
+        # then this no-ops so the pipeline keeps working. Must run before
+        # the .exe gets zipped up below. See README "Code signing".
+        env:
+          CERT_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          if (-not $env:CERT_BASE64) {
+            Write-Host "No WINDOWS_CERTIFICATE_BASE64 secret configured — skipping signing. The .exe/.msi will still work but will show 'Unknown publisher' in Windows."
+            exit 0
+          }
+          $certPath = "$env:RUNNER_TEMP\codesign.pfx"
+          [IO.File]::WriteAllBytes($certPath, [Convert]::FromBase64String($env:CERT_BASE64))
+          $signtool = Get-ChildItem -Path "C:\Program Files (x86)\Windows Kits\10\bin" -Recurse -Filter "signtool.exe" |
+            Where-Object { $_.FullName -match "x64" } | Select-Object -First 1 -ExpandProperty FullName
+          if (-not $signtool) { Write-Error "signtool.exe not found on this runner image."; exit 1 }
+          & $signtool sign /f $certPath /p $env:CERT_PASSWORD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 target/release/server-sentinel.exe
+          Remove-Item $certPath -Force
+
       - name: Package portable .exe zip
         shell: pwsh
         run: |
@@ -59,7 +81,10 @@ jobs:
           $dest = "server-sentinel-$version-windows-x86_64"
           New-Item -ItemType Directory -Path $dest | Out-Null
           Copy-Item target/release/server-sentinel.exe $dest/
-          Copy-Item -Recurse packaging/common $dest/config-sample
+          # Only server-sentinel.toml applies on Windows — the rest of
+          # packaging/common/ (postinst/prerm/postrm, the systemd unit)
+          # is Linux-only packaging plumbing and doesn't belong here.
+          Copy-Item packaging/common/server-sentinel.toml $dest/server-sentinel.toml
           Copy-Item README.md $dest/
           Compress-Archive -Path $dest -DestinationPath "$dest.zip"
 
@@ -90,6 +115,25 @@ jobs:
         # to a .wxs file, producing "Error[3] (Io): The 'build' path does
         # not exist" since no file/folder named `build` exists in the repo.
         run: cargo wix
+
+      - name: Sign .msi (skipped until a certificate is configured)
+        shell: pwsh
+        env:
+          CERT_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          if (-not $env:CERT_BASE64) {
+            Write-Host "No signing certificate configured — skipping .msi signing."
+            exit 0
+          }
+          $certPath = "$env:RUNNER_TEMP\codesign.pfx"
+          [IO.File]::WriteAllBytes($certPath, [Convert]::FromBase64String($env:CERT_BASE64))
+          $signtool = Get-ChildItem -Path "C:\Program Files (x86)\Windows Kits\10\bin" -Recurse -Filter "signtool.exe" |
+            Where-Object { $_.FullName -match "x64" } | Select-Object -First 1 -ExpandProperty FullName
+          if (-not $signtool) { Write-Error "signtool.exe not found on this runner image."; exit 1 }
+          $msi = Get-ChildItem -Path target/wix -Filter "*.msi" | Select-Object -First 1 -ExpandProperty FullName
+          & $signtool sign /f $certPath /p $env:CERT_PASSWORD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $msi
+          Remove-Item $certPath -Force
 
       - uses: actions/upload-artifact@v4
         with:

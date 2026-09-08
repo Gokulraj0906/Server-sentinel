@@ -83,12 +83,11 @@ Both install the binary to `/usr/bin/server-sentinel`, config to
 removed only on `dpkg -P` / full `rpm -e`), a systemd unit, and create
 `/var/lib/server-sentinel/{incidents,reports}`.
 
-**Windows (`.msi` / `.exe`) — not build-able in this sandbox (no Windows
-toolchain here), wired up via CI instead.** `.github/workflows/release.yml`
-builds a raw `.exe` (zipped with the README and a sample config) and an
-`.msi` installer (via `cargo-wix` + WiX Toolset v3) on a real
-`windows-latest` GitHub Actions runner, and attaches both — plus the
-`.deb`/`.rpm` — to a GitHub Release whenever you push a `v*` tag.
+**Windows (`.msi` / `.exe`)** — built via CI on a real `windows-latest`
+runner (`.github/workflows/release.yml`), including a custom installer
+wizard page (`wix/main.wxs`, hand-authored — see "WiX installer wizard"
+below) that asks for email settings during setup and writes them
+straight into the installed config file.
 
 **Important**: unlike the `.deb`/`.rpm`, I could not actually run and
 verify the Windows/MSI leg of that workflow — I wrote it against the
@@ -120,6 +119,101 @@ cargo build --release
 > `getrandom = "=0.2.15"`) keep the build working on 1.75. **On a
 > current toolchain (1.85+) these pins can simply be deleted** to pick up
 > the latest versions.
+
+## Code signing (fixes "Unknown publisher" / SmartScreen)
+
+Windows shows that warning because the `.msi`/`.exe` aren't digitally
+signed. There is **no free option that works for public/customer
+distribution** — this needs an honest budget line if you're shipping this
+commercially:
+
+| Option | Cost | Result |
+|---|---|---|
+| Self-signed cert | Free | Still triggers SmartScreen for anyone who hasn't manually trusted your cert — only useful if you control every install target directly (e.g. push trust via your own team's GPO) |
+| [SignPath.io OSS program](https://signpath.io/oss) | Free | Only if this project is public/open-source and accepted into their program |
+| Standard (OV) code signing cert (Sectigo/SSL.com/DigiCert) | ~$100–400/yr | Real publisher name; SmartScreen still shows a milder warning until the file builds download "reputation" (can take weeks) |
+| EV code signing cert | ~$300–600/yr, needs a hardware token | Only option with **immediate** SmartScreen trust, no reputation wait |
+
+**Once you have a certificate** (a `.pfx` file + its password), set it up:
+```bash
+base64 -w0 your-cert.pfx > cert.b64   # or: certutil -encode on Windows
+```
+Then in your GitHub repo: **Settings → Secrets and variables → Actions**,
+add:
+- `WINDOWS_CERTIFICATE_BASE64` — contents of `cert.b64`
+- `WINDOWS_CERTIFICATE_PASSWORD` — the `.pfx` password
+
+The release workflow already has signing steps wired in (`signtool.exe`,
+present on `windows-latest` runners) — they check for these secrets and
+sign the `.exe` and `.msi` automatically if present, or skip cleanly (no
+build failure) if not. Nothing else to change once the secrets are set.
+
+## Email notifications
+
+Two real providers, selected via `[notification.email] provider`:
+
+**`provider = "smtp"`** — authenticated SMTP with STARTTLS + AUTH LOGIN.
+This is the *same protocol* for Gmail and AWS SES; only host/credentials differ.
+
+- **Gmail**: `smtp_host = "smtp.gmail.com"`, `smtp_port = 587`.
+  `smtp_username` = your full Gmail address. `smtp_password` = an **App
+  Password**, not your normal password — turn on 2-Step Verification,
+  then generate one at https://myaccount.google.com/apppasswords.
+- **AWS SES**: `smtp_host = "email-smtp.<your-region>.amazonaws.com"`,
+  `smtp_port = 587`. `smtp_username`/`smtp_password` = the credentials
+  from SES console → **SMTP settings** → **Create SMTP credentials** —
+  these are a separate generated pair, **not** your AWS access key/secret.
+
+**`provider = "resend"`** — Resend's HTTPS API. Get a key (free tier
+available) at https://resend.com/api-keys, set `resend_api_key`.
+
+TLS is hand-rolled on `rustls` (no OpenSSL dependency, so this works the
+same way regardless of what's installed on the host). **Caveat on
+verification**: I validated the TLS/handshake code against a reachable
+HTTPS host from this dev sandbox and confirmed it completes a real
+TLS handshake correctly — but the sandbox's own network sits behind a
+TLS-intercepting proxy, so I could not complete an actual end-to-end
+send against live Gmail/SES/Resend. Test a real incident notification
+against your actual provider before relying on it.
+
+## WiX installer wizard (email settings during setup)
+
+`wix/main.wxs` adds one extra page to the standard installer wizard,
+between feature selection and the final confirm screen, that asks for:
+enable email (checkbox), provider (SMTP vs Resend radio buttons), and
+the relevant host/username/password or API key, plus from/to addresses.
+On finishing setup, those answers are written directly into
+`server-sentinel.toml` in the install directory via WiX's `IniFile`
+mechanism — no manual config editing needed for the common case.
+
+**This is the single least-verified piece of this entire project — read
+this before trusting it.** I have no access to a Windows machine, so I
+could not run the installer and watch the dialog actually appear or
+click through it. What I *can* say with confidence:
+- The file is well-formed XML (checked)
+- Everything outside the custom dialog follows cargo-wix's own real
+  template (fetched directly from its source, not reconstructed from
+  memory) — so the base install (files, PATH entry, uninstall) should be
+  as reliable as any standard cargo-wix installer
+- The custom dialog and its hook into the wizard's Back/Next sequence
+  uses a well-documented WiX pattern (overriding a `Publish` `NewDialog`
+  event with a higher `Order`) — but "well-documented" isn't "tested by
+  me on this exact file"
+
+**What to check on your first real Windows test:**
+1. Does the "Email Notifications" page actually appear after feature
+   selection?
+2. Does the SMTP/Resend field set correctly toggle when you click the
+   other radio button?
+3. Does Back/Next navigation around that page work, or does it skip/loop?
+4. After install, open the installed `server-sentinel.toml` and confirm
+   the `[notification.email]` section has your entered values, correctly
+   quoted, with no duplicate keys.
+
+If any of those fail, send me exactly what happened (a screenshot or the
+behavior) the same way you did for the `cargo wix build` and
+`config-sample` issues — I'll fix it the same way: precisely, from your
+actual observed failure, rather than guessing again blind.
 
 ## Configuration
 
@@ -181,9 +275,20 @@ WantedBy=multi-user.target
   portable per-mount-point read/write rates; `total_read_bytes_per_sec`
   is a system-wide sum of process I/O deltas, which is accurate in
   aggregate but not split by volume.
-- **Email notifier speaks plain SMTP** (connect + `MAIL FROM`/`RCPT
-  TO`/`DATA`, no STARTTLS/AUTH). Fine for an internal relay; for Gmail/SES
-  swap in the `lettre` crate behind the same `Notifier` trait.
+- **Email delivery not end-to-end verified** — the STARTTLS+AUTH (Gmail/
+  SES) and Resend HTTPS code paths were validated structurally (compiles,
+  correct protocol sequencing, TLS handshake logic proven against a
+  reachable host) but not against a live Gmail/SES/Resend account, since
+  this dev sandbox's network sits behind a TLS-intercepting proxy. Send a
+  real test incident through your actual provider before relying on it.
+- **MSI install not end-to-end verified** — the `.msi` was inspected
+  (valid WiX-built installer database, correct metadata) but not
+  installed on a real Windows machine. Confirm it actually installs,
+  runs, and uninstalls cleanly before shipping it to anyone.
+- **No code-signing certificate by default.** The `.exe`/`.msi` will
+  show "Unknown publisher" / SmartScreen warnings until you provide a
+  certificate — see "Code signing" above. This is a real cost for
+  commercial distribution, not something free.
 - **No central server, dashboard, or database.** Storage is local
   files (FR-019's Phase 1 architecture). Multi-server aggregation and a
   web UI are explicitly later-phase items in the FRD, not attempted here.

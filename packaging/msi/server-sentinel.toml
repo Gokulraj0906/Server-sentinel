@@ -1,0 +1,31 @@
+[server]
+name = "server-sentinel-host"
+environment = "production"
+
+[monitoring]
+normal_interval_seconds = 10
+investigation_interval_seconds = 1
+top_process_count = 8
+
+[thresholds]
+cpu_warning = 80.0
+cpu_critical = 90.0
+memory_warning = 80.0
+memory_critical = 90.0
+disk_warning = 80.0
+disk_critical = 90.0
+
+[incident]
+trigger_duration_seconds = 10
+pre_incident_seconds = 120
+post_recovery_seconds = 30
+recovery_duration_seconds = 5
+
+[storage]
+base_dir = "C:\\ProgramData\\ServerSentinel"
+
+# NOTE: [notification.email] is intentionally NOT included here — the
+# installer wizard writes that whole section fresh via WiX IniFile
+# actions based on what you enter during setup. Shipping placeholder
+# keys here too would create duplicate keys (invalid TOML) once the
+# installer appends its own.

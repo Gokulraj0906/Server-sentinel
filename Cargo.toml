@@ -23,6 +23,13 @@ uuid = { version = "=1.10.0", features = ["v4", "serde"] }
 ctrlc = "3"
 clap = { version = "=4.5.20", features = ["derive"] }
 
+# TLS + auth for the real email providers (Gmail/SES SMTP, Resend HTTPS).
+# Pinned to versions contemporaneous with the sandbox's rustc 1.75 for the
+# same reason as the pins below — see the note further down.
+rustls = { version = "=0.21.11", default-features = false, features = ["tls12", "logging"] }
+webpki-roots = "=0.25.4"
+base64 = "=0.21.7"
+
 # The sandbox toolchain is pinned to rustc 1.75 (Ubuntu apt has no newer
 # rustc available). Several transitive deps have since bumped their MSRV
 # past what 1.75 supports (edition2024 etc). Pin the offending transitive

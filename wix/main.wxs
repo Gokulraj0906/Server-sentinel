@@ -1,0 +1,276 @@
+<?xml version='1.0' encoding='windows-1252'?>
+<!--
+  ServerSentinel Windows installer.
+
+  Based on cargo-wix's own default template (fetched from
+  https://github.com/volks73/cargo-wix/blob/main/src/templates/main.wxs.mustache,
+  cargo-wix 0.3.8) with the mustache placeholders resolved to this
+  project's actual values, plus a hand-authored custom dialog
+  (EmailConfigDlg) inserted into the install wizard to collect email
+  settings and write them into the installed config file via IniFile
+  actions.
+
+  HONESTY NOTE: everything up through the standard cargo-wix-generated
+  structure (Product/Package/Directory/Feature/base UI) follows the
+  vendor's own template closely and should be as reliable as any
+  cargo-wix-generated installer. The custom EmailConfigDlg dialog and its
+  hook into the WixUI_FeatureTree Next-button sequence is hand-authored
+  and has NOT been tested on a real Windows machine (no Windows toolchain
+  was available while writing this) — if the dialog doesn't appear, or
+  Back/Next navigation misbehaves around it, that's the first place to
+  look. See the project README's "WiX installer wizard" note.
+-->
+
+<?if $(sys.BUILDARCH) = x64 or $(sys.BUILDARCH) = arm64 ?>
+    <?define PlatformProgramFilesFolder = "ProgramFiles64Folder" ?>
+<?else ?>
+    <?define PlatformProgramFilesFolder = "ProgramFilesFolder" ?>
+<?endif ?>
+
+<Wix xmlns='http://schemas.microsoft.com/wix/2006/wi'>
+
+    <Product
+        Id='*'
+        Name='ServerSentinel'
+        UpgradeCode='DFD87B51-C32A-4C82-BC01-A8B74F5CF380'
+        Manufacturer='ServerSentinel'
+        Language='1033'
+        Codepage='1252'
+        Version='$(var.Version)'>
+
+        <Package Id='*'
+            Keywords='Installer'
+            Description='ServerSentinel monitoring agent'
+            Manufacturer='ServerSentinel'
+            InstallerVersion='450'
+            Languages='1033'
+            Compressed='yes'
+            InstallScope='perMachine'
+            SummaryCodepage='1252'
+            />
+
+        <MajorUpgrade
+            Schedule='afterInstallInitialize'
+            DowngradeErrorMessage='A newer version of [ProductName] is already installed. Setup will now exit.'/>
+
+        <Media Id='1' Cabinet='media1.cab' EmbedCab='yes' DiskPrompt='CD-ROM #1'/>
+        <Property Id='DiskPrompt' Value='ServerSentinel Installation'/>
+
+        <!-- ==================================================================
+             Email settings collected by the custom EmailConfigDlg dialog
+             further down. Defaults are safe if the user just clicks
+             through without changing anything (email stays disabled).
+             ================================================================== -->
+        <Property Id='EMAIL_ENABLED' Value='' />
+        <Property Id='EMAIL_ENABLED_TOML' Value='false' />
+        <Property Id='EMAIL_PROVIDER' Value='smtp' />
+        <Property Id='SMTP_HOST' Value='' />
+        <Property Id='SMTP_PORT' Value='587' />
+        <Property Id='SMTP_USERNAME' Value='' />
+        <Property Id='SMTP_PASSWORD' Value='' Hidden='yes' Secure='no' />
+        <Property Id='RESEND_API_KEY' Value='' Hidden='yes' Secure='no' />
+        <Property Id='FROM_ADDRESS' Value='' />
+        <Property Id='TO_ADDRESS' Value='' />
+
+        <!-- Translates the checkbox's blank/"1" value into the literal
+             text "true"/"false" that TOML requires for a boolean. -->
+        <CustomAction Id='SetEmailEnabledTrue' Property='EMAIL_ENABLED_TOML' Value='true' />
+        <CustomAction Id='SetEmailEnabledFalse' Property='EMAIL_ENABLED_TOML' Value='false' />
+
+        <Directory Id='TARGETDIR' Name='SourceDir'>
+            <Directory Id='$(var.PlatformProgramFilesFolder)' Name='PFiles'>
+                <Directory Id='APPLICATIONFOLDER' Name='ServerSentinel'>
+
+                    <Directory Id='Bin' Name='bin'>
+                        <Component Id='Path' Guid='*' KeyPath='yes'>
+                            <Environment
+                                Id='PATH'
+                                Name='PATH'
+                                Value='[Bin]'
+                                Permanent='no'
+                                Part='last'
+                                Action='set'
+                                System='yes'/>
+                        </Component>
+                        <Component Id='binary0' Guid='*'>
+                            <File
+                                Id='exe0'
+                                Name='server-sentinel.exe'
+                                DiskId='1'
+                                Source='target\release\server-sentinel.exe'
+                                KeyPath='yes'/>
+                        </Component>
+                    </Directory>
+
+                    <!-- Config file + the IniFile actions that write the
+                         wizard's answers into it at install time. -->
+                    <Component Id='ConfigFile' Guid='*'>
+                        <File
+                            Id='ConfigTOML'
+                            Name='server-sentinel.toml'
+                            DiskId='1'
+                            Source='packaging\msi\server-sentinel.toml'
+                            KeyPath='yes'/>
+
+                        <IniFile Id='WriteEmailEnabled' Action='addLine'
+                            Section='notification.email' Key='enabled'
+                            Value='[EMAIL_ENABLED_TOML]'
+                            Name='server-sentinel.toml' Directory='APPLICATIONFOLDER' />
+                        <IniFile Id='WriteEmailProvider' Action='addLine'
+                            Section='notification.email' Key='provider'
+                            Value='&quot;[EMAIL_PROVIDER]&quot;'
+                            Name='server-sentinel.toml' Directory='APPLICATIONFOLDER' />
+                        <IniFile Id='WriteSmtpHost' Action='addLine'
+                            Section='notification.email' Key='smtp_host'
+                            Value='&quot;[SMTP_HOST]&quot;'
+                            Name='server-sentinel.toml' Directory='APPLICATIONFOLDER' />
+                        <IniFile Id='WriteSmtpPort' Action='addLine'
+                            Section='notification.email' Key='smtp_port'
+                            Value='[SMTP_PORT]'
+                            Name='server-sentinel.toml' Directory='APPLICATIONFOLDER' />
+                        <IniFile Id='WriteSmtpUsername' Action='addLine'
+                            Section='notification.email' Key='smtp_username'
+                            Value='&quot;[SMTP_USERNAME]&quot;'
+                            Name='server-sentinel.toml' Directory='APPLICATIONFOLDER' />
+                        <IniFile Id='WriteSmtpPassword' Action='addLine'
+                            Section='notification.email' Key='smtp_password'
+                            Value='&quot;[SMTP_PASSWORD]&quot;'
+                            Name='server-sentinel.toml' Directory='APPLICATIONFOLDER' />
+                        <IniFile Id='WriteResendApiKey' Action='addLine'
+                            Section='notification.email' Key='resend_api_key'
+                            Value='&quot;[RESEND_API_KEY]&quot;'
+                            Name='server-sentinel.toml' Directory='APPLICATIONFOLDER' />
+                        <IniFile Id='WriteFromAddress' Action='addLine'
+                            Section='notification.email' Key='from_address'
+                            Value='&quot;[FROM_ADDRESS]&quot;'
+                            Name='server-sentinel.toml' Directory='APPLICATIONFOLDER' />
+                        <IniFile Id='WriteToAddress' Action='addLine'
+                            Section='notification.email' Key='to_addresses'
+                            Value='[&quot;[TO_ADDRESS]&quot;]'
+                            Name='server-sentinel.toml' Directory='APPLICATIONFOLDER' />
+                    </Component>
+
+                </Directory>
+            </Directory>
+        </Directory>
+
+        <Feature
+            Id='Binaries'
+            Title='Application'
+            Description='Installs the agent and its configuration.'
+            Level='1'
+            ConfigurableDirectory='APPLICATIONFOLDER'
+            AllowAdvertise='no'
+            Display='expand'
+            Absent='disallow'>
+            <ComponentRef Id='binary0'/>
+            <ComponentRef Id='ConfigFile'/>
+
+            <Feature
+                Id='Environment'
+                Title='PATH Environment Variable'
+                Description='Add the install location to PATH so server-sentinel.exe can be run from any prompt.'
+                Level='1'
+                Absent='allow'>
+                <ComponentRef Id='Path'/>
+            </Feature>
+        </Feature>
+
+        <SetProperty Id='ARPINSTALLLOCATION' Value='[APPLICATIONFOLDER]' After='CostFinalize'/>
+
+        <!-- ==================================================================
+             UI: standard WixUI_FeatureTree sequence, with EmailConfigDlg
+             (below) spliced in between the feature-selection dialog
+             (CustomizeDlg) and the final confirmation dialog
+             (VerifyReadyDlg). See the file-level note at the top of this
+             file re: this part being untested on real Windows.
+             ================================================================== -->
+        <UI>
+            <UIRef Id='WixUI_FeatureTree'/>
+
+            <!-- No EULA shipped, so skip straight past the license dialog
+                 (same override cargo-wix's own template uses when
+                 `license-source` is unset). -->
+            <Publish Dialog='WelcomeDlg' Control='Next' Event='NewDialog' Value='CustomizeDlg' Order='99'>1</Publish>
+            <Publish Dialog='CustomizeDlg' Control='Back' Event='NewDialog' Value='WelcomeDlg' Order='99'>1</Publish>
+
+            <Dialog Id='EmailConfigDlg' Width='370' Height='270' Title='[ProductName] Setup'>
+                <Control Id='Back' Type='PushButton' X='180' Y='243' Width='56' Height='17' Text='&amp;Back' />
+                <Control Id='Next' Type='PushButton' X='236' Y='243' Width='56' Height='17' Default='yes' Text='&amp;Next'>
+                    <Publish Event='DoAction' Value='SetEmailEnabledTrue' Order='1'>EMAIL_ENABLED</Publish>
+                    <Publish Event='DoAction' Value='SetEmailEnabledFalse' Order='1'>NOT EMAIL_ENABLED</Publish>
+                    <Publish Event='NewDialog' Value='VerifyReadyDlg' Order='2'>1</Publish>
+                </Control>
+                <Control Id='Cancel' Type='PushButton' X='304' Y='243' Width='56' Height='17' Cancel='yes' Text='Cancel'>
+                    <Publish Event='SpawnDialog' Value='CancelDlg'>1</Publish>
+                </Control>
+                <Control Id='BannerBitmap' Type='Bitmap' X='0' Y='0' Width='370' Height='44' TabSkip='no' Text='WixUIBannerBmp' />
+                <Control Id='BannerLine' Type='Line' X='0' Y='44' Width='370' Height='0' />
+                <Control Id='BottomLine' Type='Line' X='0' Y='234' Width='370' Height='0' />
+                <Control Id='Title' Type='Text' X='15' Y='6' Width='240' Height='15' Transparent='yes' NoPrefix='yes' Text='Email Notifications' />
+                <Control Id='Description' Type='Text' X='25' Y='23' Width='340' Height='15' Transparent='yes' NoPrefix='yes' Text='Optional. Leave blank and configure later by editing the .toml config file if you prefer.' />
+
+                <Control Id='EnabledCheckBox' Type='CheckBox' X='25' Y='50' Width='250' Height='17' Property='EMAIL_ENABLED' CheckBoxValue='1' Text='Enable email notifications' />
+
+                <Control Id='ProviderLabel' Type='Text' X='25' Y='72' Width='100' Height='15' Text='Provider:' />
+                <Control Id='ProviderRadioGroup' Type='RadioButtonGroup' X='120' Y='70' Width='220' Height='17' Property='EMAIL_PROVIDER'>
+                    <RadioButtonGroup Property='EMAIL_PROVIDER'>
+                        <RadioButton Value='smtp' X='0' Y='0' Width='140' Height='17' Text='SMTP (Gmail / AWS SES)' />
+                        <RadioButton Value='resend' X='145' Y='0' Width='75' Height='17' Text='Resend' />
+                    </RadioButtonGroup>
+                </Control>
+
+                <Control Id='SmtpHostLabel' Type='Text' X='25' Y='95' Width='90' Height='15' Text='SMTP host:'>
+                    <Condition Action='hide'>EMAIL_PROVIDER = "resend"</Condition>
+                    <Condition Action='show'>EMAIL_PROVIDER = "smtp"</Condition>
+                </Control>
+                <Control Id='SmtpHostEdit' Type='Edit' X='120' Y='93' Width='220' Height='17' Property='SMTP_HOST'>
+                    <Condition Action='hide'>EMAIL_PROVIDER = "resend"</Condition>
+                    <Condition Action='show'>EMAIL_PROVIDER = "smtp"</Condition>
+                </Control>
+
+                <Control Id='SmtpUserLabel' Type='Text' X='25' Y='115' Width='90' Height='15' Text='SMTP username:'>
+                    <Condition Action='hide'>EMAIL_PROVIDER = "resend"</Condition>
+                    <Condition Action='show'>EMAIL_PROVIDER = "smtp"</Condition>
+                </Control>
+                <Control Id='SmtpUserEdit' Type='Edit' X='120' Y='113' Width='220' Height='17' Property='SMTP_USERNAME'>
+                    <Condition Action='hide'>EMAIL_PROVIDER = "resend"</Condition>
+                    <Condition Action='show'>EMAIL_PROVIDER = "smtp"</Condition>
+                </Control>
+
+                <Control Id='SmtpPassLabel' Type='Text' X='25' Y='135' Width='90' Height='15' Text='SMTP password:'>
+                    <Condition Action='hide'>EMAIL_PROVIDER = "resend"</Condition>
+                    <Condition Action='show'>EMAIL_PROVIDER = "smtp"</Condition>
+                </Control>
+                <Control Id='SmtpPassEdit' Type='Edit' X='120' Y='133' Width='220' Height='17' Property='SMTP_PASSWORD' Password='yes'>
+                    <Condition Action='hide'>EMAIL_PROVIDER = "resend"</Condition>
+                    <Condition Action='show'>EMAIL_PROVIDER = "smtp"</Condition>
+                </Control>
+
+                <Control Id='ResendKeyLabel' Type='Text' X='25' Y='135' Width='90' Height='15' Text='Resend API key:'>
+                    <Condition Action='show'>EMAIL_PROVIDER = "resend"</Condition>
+                    <Condition Action='hide'>EMAIL_PROVIDER = "smtp"</Condition>
+                </Control>
+                <Control Id='ResendKeyEdit' Type='Edit' X='120' Y='133' Width='220' Height='17' Property='RESEND_API_KEY' Password='yes'>
+                    <Condition Action='show'>EMAIL_PROVIDER = "resend"</Condition>
+                    <Condition Action='hide'>EMAIL_PROVIDER = "smtp"</Condition>
+                </Control>
+
+                <Control Id='FromLabel' Type='Text' X='25' Y='160' Width='90' Height='15' Text='From address:' />
+                <Control Id='FromEdit' Type='Edit' X='120' Y='158' Width='220' Height='17' Property='FROM_ADDRESS' />
+
+                <Control Id='ToLabel' Type='Text' X='25' Y='182' Width='90' Height='15' Text='Send alerts to:' />
+                <Control Id='ToEdit' Type='Edit' X='120' Y='180' Width='220' Height='17' Property='TO_ADDRESS' />
+            </Dialog>
+
+            <Publish Dialog='CustomizeDlg' Control='Next' Event='NewDialog' Value='EmailConfigDlg' Order='10'>1</Publish>
+            <Publish Dialog='EmailConfigDlg' Control='Back' Event='NewDialog' Value='CustomizeDlg' Order='10'>1</Publish>
+            <Publish Dialog='VerifyReadyDlg' Control='Back' Event='NewDialog' Value='EmailConfigDlg' Order='10'>NOT Installed</Publish>
+        </UI>
+
+        <!-- No EULA / banner / dialog image / product icon shipped —
+             WixUI_FeatureTree's own defaults are used. -->
+
+    </Product>
+
+</Wix>

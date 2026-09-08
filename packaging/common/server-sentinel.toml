@@ -26,7 +26,29 @@ base_dir = "/var/lib/server-sentinel"
 
 [notification.email]
 enabled = false
+# "smtp" (Gmail app password or AWS SES SMTP creds) or "resend"
+provider = "smtp"
+
+# --- provider = "smtp" ---
+# Gmail:  smtp_host = "smtp.gmail.com", smtp_port = 587
+#         smtp_username = your full Gmail address
+#         smtp_password = a 16-character App Password (NOT your normal
+#         Gmail password — generate one at https://myaccount.google.com/apppasswords,
+#         requires 2-Step Verification to be turned on first)
+# AWS SES: smtp_host = "email-smtp.<your-region>.amazonaws.com", smtp_port = 587
+#         smtp_username / smtp_password = the SES-generated SMTP
+#         credentials from SES console -> "SMTP settings" -> "Create SMTP
+#         credentials" (these are NOT your AWS access key ID/secret —
+#         SES generates a separate username/password pair specifically
+#         for SMTP)
 smtp_host = ""
-smtp_port = 25
+smtp_port = 587
+smtp_username = ""
+smtp_password = ""
+
+# --- provider = "resend" ---
+# Get an API key at https://resend.com/api-keys (free tier available)
+resend_api_key = ""
+
 from_address = ""
 to_addresses = []

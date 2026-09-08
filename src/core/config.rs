@@ -110,13 +110,49 @@ impl Default for StorageConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct EmailNotificationConfig {
     pub enabled: bool,
+    /// "smtp" (authenticated SMTP+STARTTLS — works for Gmail app
+    /// passwords *and* the AWS SES SMTP interface, since they're the same
+    /// protocol) or "resend" (Resend's HTTPS API).
+    pub provider: String,
+
+    // --- provider = "smtp" ---
+    /// e.g. "smtp.gmail.com" or "email-smtp.us-east-1.amazonaws.com"
     pub smtp_host: String,
     pub smtp_port: u16,
+    /// Gmail: your full address. SES: the SMTP username from the SES
+    /// console's "SMTP settings" — NOT your AWS access key ID.
+    pub smtp_username: String,
+    /// Gmail: an App Password (not your account password — Google
+    /// requires 2FA + a generated app password for SMTP). SES: the SMTP
+    /// password from the same "SMTP settings" page — NOT your AWS secret
+    /// access key.
+    pub smtp_password: String,
+
+    // --- provider = "resend" ---
+    pub resend_api_key: String,
+
     pub from_address: String,
     pub to_addresses: Vec<String>,
+}
+
+impl Default for EmailNotificationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            provider: "smtp".to_string(),
+            smtp_host: String::new(),
+            smtp_port: 587,
+            smtp_username: String::new(),
+            smtp_password: String::new(),
+            resend_api_key: String::new(),
+            from_address: String::new(),
+            to_addresses: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
