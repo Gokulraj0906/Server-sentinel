@@ -61,16 +61,16 @@
              further down. Defaults are safe if the user just clicks
              through without changing anything (email stays disabled).
              ================================================================== -->
-        <Property Id='EMAIL_ENABLED' Value='' />
+        <Property Id='EMAIL_ENABLED' />
         <Property Id='EMAIL_ENABLED_TOML' Value='false' />
         <Property Id='EMAIL_PROVIDER' Value='smtp' />
-        <Property Id='SMTP_HOST' Value='' />
+        <Property Id='SMTP_HOST' />
         <Property Id='SMTP_PORT' Value='587' />
-        <Property Id='SMTP_USERNAME' Value='' />
-        <Property Id='SMTP_PASSWORD' Value='' Hidden='yes' Secure='no' />
-        <Property Id='RESEND_API_KEY' Value='' Hidden='yes' Secure='no' />
-        <Property Id='FROM_ADDRESS' Value='' />
-        <Property Id='TO_ADDRESS' Value='' />
+        <Property Id='SMTP_USERNAME' />
+        <Property Id='SMTP_PASSWORD' Hidden='yes' Secure='no' />
+        <Property Id='RESEND_API_KEY' Hidden='yes' Secure='no' />
+        <Property Id='FROM_ADDRESS' />
+        <Property Id='TO_ADDRESS' />
 
         <!-- Translates the checkbox's blank/"1" value into the literal
              text "true"/"false" that TOML requires for a boolean. -->
@@ -185,8 +185,13 @@
              (VerifyReadyDlg). See the file-level note at the top of this
              file re: this part being untested on real Windows.
              ================================================================== -->
+        <!-- UIRef must be a direct child of Product, not nested inside
+             a <UI> block — confirmed against WiX v3's own documentation
+             and every real-world example after the first CI run caught
+             this as a schema violation (candle error, exit code 6). -->
+        <UIRef Id='WixUI_FeatureTree'/>
+
         <UI>
-            <UIRef Id='WixUI_FeatureTree'/>
 
             <!-- No EULA shipped, so skip straight past the license dialog
                  (same override cargo-wix's own template uses when
