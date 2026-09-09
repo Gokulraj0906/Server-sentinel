@@ -114,7 +114,13 @@ jobs:
         # silently treated the literal word "build" as the positional path
         # to a .wxs file, producing "Error[3] (Io): The 'build' path does
         # not exist" since no file/folder named `build` exists in the repo.
-        run: cargo wix
+        #
+        # --nocapture: cargo-wix suppresses candle.exe/light.exe's own
+        # output by default, so a compile error only shows a generic
+        # "failed with exit code = N" with no detail on *what* is wrong.
+        # This flag surfaces the real WiX error code (e.g. CNDL0006) in
+        # the Actions log, which is what you actually need to debug it.
+        run: cargo wix --nocapture
 
       - name: Sign .msi (skipped until a certificate is configured)
         shell: pwsh
