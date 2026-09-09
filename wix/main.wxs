@@ -61,16 +61,16 @@
              further down. Defaults are safe if the user just clicks
              through without changing anything (email stays disabled).
              ================================================================== -->
-        <Property Id='EMAIL_ENABLED' Value='' />
+        <Property Id='EMAIL_ENABLED' Secure='no' />
         <Property Id='EMAIL_ENABLED_TOML' Value='false' />
         <Property Id='EMAIL_PROVIDER' Value='smtp' />
-        <Property Id='SMTP_HOST' Value='' />
+        <Property Id='SMTP_HOST' Secure='no' />
         <Property Id='SMTP_PORT' Value='587' />
-        <Property Id='SMTP_USERNAME' Value='' />
+        <Property Id='SMTP_USERNAME' Secure='no' />
         <Property Id='SMTP_PASSWORD' Hidden='yes' Secure='no' />
         <Property Id='RESEND_API_KEY' Hidden='yes' Secure='no' />
-        <Property Id='FROM_ADDRESS' Value='' />
-        <Property Id='TO_ADDRESS' Value='' />
+        <Property Id='FROM_ADDRESS' Secure='no' />
+        <Property Id='TO_ADDRESS' Secure='no' />
 
         <!-- Translates the checkbox's blank/"1" value into the literal
              text "true"/"false" that TOML requires for a boolean. -->
