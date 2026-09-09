@@ -61,16 +61,16 @@
              further down. Defaults are safe if the user just clicks
              through without changing anything (email stays disabled).
              ================================================================== -->
-        <Property Id='EMAIL_ENABLED' />
+        <Property Id='EMAIL_ENABLED' Value='' />
         <Property Id='EMAIL_ENABLED_TOML' Value='false' />
         <Property Id='EMAIL_PROVIDER' Value='smtp' />
-        <Property Id='SMTP_HOST' />
+        <Property Id='SMTP_HOST' Value='' />
         <Property Id='SMTP_PORT' Value='587' />
-        <Property Id='SMTP_USERNAME' />
+        <Property Id='SMTP_USERNAME' Value='' />
         <Property Id='SMTP_PASSWORD' Hidden='yes' Secure='no' />
         <Property Id='RESEND_API_KEY' Hidden='yes' Secure='no' />
-        <Property Id='FROM_ADDRESS' />
-        <Property Id='TO_ADDRESS' />
+        <Property Id='FROM_ADDRESS' Value='' />
+        <Property Id='TO_ADDRESS' Value='' />
 
         <!-- Translates the checkbox's blank/"1" value into the literal
              text "true"/"false" that TOML requires for a boolean. -->
@@ -209,7 +209,7 @@
                 <Control Id='Cancel' Type='PushButton' X='304' Y='243' Width='56' Height='17' Cancel='yes' Text='Cancel'>
                     <Publish Event='SpawnDialog' Value='CancelDlg'>1</Publish>
                 </Control>
-                <Control Id='BannerBitmap' Type='Bitmap' X='0' Y='0' Width='370' Height='44' TabSkip='no' Text='WixUIBannerBmp' />
+                <Control Id='BannerBitmap' Type='Bitmap' X='0' Y='0' Width='370' Height='44' TabSkip='no' Text='WixUI_Bmp_Banner' />
                 <Control Id='BannerLine' Type='Line' X='0' Y='44' Width='370' Height='0' />
                 <Control Id='BottomLine' Type='Line' X='0' Y='234' Width='370' Height='0' />
                 <Control Id='Title' Type='Text' X='15' Y='6' Width='240' Height='15' Transparent='yes' NoPrefix='yes' Text='Email Notifications' />
