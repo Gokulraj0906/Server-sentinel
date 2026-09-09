@@ -146,7 +146,7 @@
                             Name='server-sentinel.toml' Directory='APPLICATIONFOLDER' />
                         <IniFile Id='WriteToAddress' Action='addLine'
                             Section='notification.email' Key='to_addresses'
-                            Value='[&quot;[TO_ADDRESS]&quot;]'
+                            Value='[\[]&quot;[TO_ADDRESS]&quot;[\]]'
                             Name='server-sentinel.toml' Directory='APPLICATIONFOLDER' />
                     </Component>
 
