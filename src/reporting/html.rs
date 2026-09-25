@@ -6,7 +6,7 @@
 
 use crate::core::models::{AlertLevel, EvidenceQuality, IncidentReport};
 
-fn esc(s: &str) -> String {
+pub(crate) fn esc(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
@@ -84,6 +84,40 @@ pub fn render_html(report: &IncidentReport) -> String {
         .map(|r| format!("<li>{}</li>", esc(r)))
         .collect::<Vec<_>>()
         .join("\n");
+
+    let related_section = if report.related_activity.is_empty() {
+        String::new()
+    } else {
+        let rows = report
+            .related_activity
+            .iter()
+            .map(|r| {
+                let offset = if r.offset_seconds < 0 {
+                    format!("{}m {}s before", -r.offset_seconds / 60, -r.offset_seconds % 60)
+                } else {
+                    format!("+{}m {}s", r.offset_seconds / 60, r.offset_seconds % 60)
+                };
+                format!(
+                    "<tr><td class=\"ts\">{}</td><td class=\"ts\">{}</td><td>{}</td><td>{}{}</td></tr>",
+                    r.ts.format("%H:%M:%S"),
+                    offset,
+                    esc(&r.action),
+                    esc(&r.summary),
+                    r.session_id
+                        .as_ref()
+                        .map(|s| format!(" <span style=\"color:var(--muted)\">(session {})</span>", esc(s)))
+                        .unwrap_or_default()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!(
+            "<section><h2>What changed before this incident</h2>\
+             <div style=\"color:var(--muted);font-size:13px;margin-bottom:8px\">Access, configuration, package and service changes on this host in the lead-up to the incident. \
+             Inspect any session with <code>server-sentinel session &lt;id&gt;</code>, and diffs with <code>server-sentinel diff &lt;event id&gt;</code>.</div>\
+             <table>{rows}</table></section>"
+        )
+    };
 
     let affected_apps = if report.impact.affected_applications.is_empty() {
         "None identified".to_string()
@@ -181,6 +215,8 @@ pub fn render_html(report: &IncidentReport) -> String {
     {reason_if_unknown}
   </section>
 
+  {related_section}
+
   {candidates_section}
 
   <section>
@@ -244,6 +280,7 @@ pub fn render_html(report: &IncidentReport) -> String {
             .as_ref()
             .map(|r| format!("<div style=\"margin-top:10px; color:var(--muted); font-size:13px;\">Reason: {}</div>", esc(r)))
             .unwrap_or_default(),
+        related_section = related_section,
         candidates_section = if candidate_rows.is_empty() {
             String::new()
         } else {

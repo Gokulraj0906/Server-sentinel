@@ -17,6 +17,8 @@ pub mod linux;
 pub use linux::build_collectors;
 
 #[cfg(target_os = "windows")]
+pub mod win_service;
+#[cfg(target_os = "windows")]
 pub mod windows;
 #[cfg(target_os = "windows")]
 pub use windows::build_collectors;

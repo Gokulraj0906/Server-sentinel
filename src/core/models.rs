@@ -281,6 +281,24 @@ pub struct Recommendations {
     pub recommended_corrective_action: Vec<String>,
 }
 
+/// A change or access event from the security event store that happened
+/// in the lead-up to (or during) a performance incident — the "what
+/// changed right before this broke?" answer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RelatedActivity {
+    pub ts: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_id: Option<i64>,
+    pub action: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    pub summary: String,
+    /// Negative = before the incident started.
+    pub offset_seconds: i64,
+}
+
 /// The final artifact ServerSentinel produces for a single incident
 /// (FR-016 / Section 30 example report).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -301,6 +319,8 @@ pub struct IncidentReport {
     pub timeline: Vec<TimelineEvent>,
     pub impact: ImpactSummary,
     pub recommendations: Recommendations,
+    #[serde(default)]
+    pub related_activity: Vec<RelatedActivity>,
 
     pub generated_at: DateTime<Utc>,
 }

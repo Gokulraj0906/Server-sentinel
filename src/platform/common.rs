@@ -138,7 +138,7 @@ impl DiskCollector for DiskCollectorImpl {
 
         let mut read_bytes = 0u64;
         let mut write_bytes = 0u64;
-        for (_, process) in self.io_sys.processes() {
+        for process in self.io_sys.processes().values() {
             let usage = process.disk_usage();
             read_bytes += usage.read_bytes;
             write_bytes += usage.written_bytes;

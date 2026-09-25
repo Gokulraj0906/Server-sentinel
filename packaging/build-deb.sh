@@ -18,6 +18,7 @@ mkdir -p "$PKGROOT"/{DEBIAN,usr/bin,etc/server-sentinel,lib/systemd/system,var/l
 cp "$ROOT/target/release/server-sentinel" "$PKGROOT/usr/bin/server-sentinel"
 chmod 755 "$PKGROOT/usr/bin/server-sentinel"
 cp "$ROOT/packaging/common/server-sentinel.toml" "$PKGROOT/etc/server-sentinel/server-sentinel.toml"
+chmod 600 "$PKGROOT/etc/server-sentinel/server-sentinel.toml"
 cp "$ROOT/packaging/common/server-sentinel.service" "$PKGROOT/lib/systemd/system/server-sentinel.service"
 
 INSTALLED_SIZE=$(du -sk --exclude=DEBIAN "$PKGROOT" | cut -f1)

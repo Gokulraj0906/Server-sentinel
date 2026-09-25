@@ -52,3 +52,65 @@ resend_api_key = ""
 
 from_address = ""
 to_addresses = []
+
+# Webhook alerts (Slack / Discord / Teams Workflows / generic JSON).
+# The URL is a secret: prefer the SENTINEL_WEBHOOK_URL environment variable.
+[notification.webhook]
+enabled = false
+url = ""
+format = "slack"   # "slack", "discord", "teams" or "generic"
+
+# =====================================================================
+# Security auditing: who got in, what they ran, what they changed.
+# Every value below is the default; delete what you don't change.
+# =====================================================================
+[security]
+enabled = true
+retention_days = 30
+capture_command_lines = true
+redact_secrets = true          # passwords/tokens in commands and configs are masked before storage
+
+[security.auth]
+source = "auto"                # auth.log / secure / journald, whichever this host has
+backfill = false               # true: ingest existing log history on first start
+
+[security.process]
+mode = "auto"                  # kernel proc connector (every exec), falling back to /proc polling
+ignore_names = []              # e.g. ["check_disk", "node_exporter"] for chatty monitoring helpers
+
+[security.fim]
+paths = ["/etc", "/root/.ssh", "/home/*/.ssh", "/var/spool/cron", "/usr/local/bin"]
+# Add your application config, e.g. "/opt/myapp/config", "/var/www/html/.htaccess"
+max_content_bytes = 262144     # text files up to this size keep full history + diffs
+
+[security.rules]
+bruteforce_threshold = 8       # failed logins from one address within the window
+bruteforce_window_seconds = 120
+business_hours = ""            # e.g. "08:00-19:00" to flag off-hours interactive logins
+trusted_sources = []           # e.g. ["10.8.0.*"] for your VPN / jump host
+
+# Your own rules: every non-empty field must match (* wildcards).
+# [[security.rules.custom]]
+# id = "prod-db-config"
+# description = "Production database configuration changed"
+# severity = "high"
+# action = "file.*"
+# target = "/etc/postgresql/*"
+
+# Silence known-good automation (the events are still recorded).
+# [[security.rules.suppress]]
+# rule = "encoded_exec"
+# parent = "ansible*"
+# reason = "Ansible uses encoded PowerShell over WinRM"
+
+# =====================================================================
+# Forward everything to your existing SIEM / log pipeline. Also protects
+# the audit trail: root can delete the local store, not what already left.
+# =====================================================================
+[forward.ndjson]
+enabled = false                # /var/lib/server-sentinel/export/events.ndjson — point Splunk UF / Filebeat / Vector at it
+
+[forward.syslog]
+enabled = false
+address = "udp://10.0.0.10:514"
+min_severity = "info"

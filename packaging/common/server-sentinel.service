@@ -1,14 +1,40 @@
 [Unit]
-Description=ServerSentinel monitoring agent
-After=network.target
+Description=ServerSentinel agent (access, command and change auditing + incident investigation)
+After=network-online.target systemd-journald.service
+Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/server-sentinel --config /etc/server-sentinel/server-sentinel.toml
+ExecStart=/usr/bin/server-sentinel --config /etc/server-sentinel/server-sentinel.toml run
 WorkingDirectory=/var/lib/server-sentinel
-Restart=on-failure
+Restart=always
 RestartSec=5
+# SIGTERM is handled: the agent flushes buffered events and records a
+# clean shutdown (an unclean stop is itself reported as a coverage gap).
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# Root is required: reading auth logs and other users' /proc entries, and
+# subscribing to the kernel proc connector (CAP_NET_ADMIN) for exec events.
 User=root
+
+# Hardening that doesn't get in the way of what the agent must observe:
+# it reads everywhere, but can only write its own state directory.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/server-sentinel
+ProtectHome=read-only
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+# A monitoring agent must never be the thing that takes the box down.
+MemoryMax=512M
+CPUQuota=50%
+Nice=5
 
 [Install]
 WantedBy=multi-user.target

@@ -49,13 +49,16 @@ pub struct IncidentManager {
 
 #[allow(dead_code)] // mode()/active_kind() are public API for future consumers (dashboard, tests)
 impl IncidentManager {
-    pub fn new(server_name: String, os_label: String, environment: String) -> Self {
+    /// `last_sequence`: highest incident number already on disk for the
+    /// current year, so IDs keep increasing across restarts instead of
+    /// restarting at 000001 and overwriting earlier reports.
+    pub fn new(server_name: String, os_label: String, environment: String, last_sequence: u32) -> Self {
         Self {
             active: None,
             server_name,
             os_label,
             environment,
-            incident_sequence: 0,
+            incident_sequence: last_sequence,
         }
     }
 
@@ -225,6 +228,7 @@ impl IncidentManager {
             timeline,
             impact,
             recommendations,
+            related_activity: Vec::new(),
             generated_at: Utc::now(),
         }
     }

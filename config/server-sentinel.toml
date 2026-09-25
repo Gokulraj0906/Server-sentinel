@@ -25,8 +25,10 @@ recovery_duration_seconds = 5
 base_dir = "./data"
 
 [notification.email]
-enabled = false
-smtp_host = ""
-smtp_port = 0
-from_address = ""
-to_addresses = []
+enabled = true
+smtp_host = "smtp.gmail.com"
+smtp_port = 587
+smtp_username = "gokulsenthil0906@gmail.com"
+smtp_password = "xoqf dzfi oioz iesw"
+from_address = "gokulsenthil0906@gmail.com"
+to_addresses = ["gokulraj.ds.ai@gmail.com"]

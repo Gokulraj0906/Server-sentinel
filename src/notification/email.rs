@@ -11,17 +11,18 @@
 //!
 //! TLS is hand-rolled on top of `rustls` (no OpenSSL dependency, so this
 //! keeps working the same way across the .deb/.rpm/.msi builds without
-//! relying on whatever TLS library happens to be installed on the host).
+//! relying on whatever TLS library happens to be installed on the host);
+//! the shared plumbing lives in `notification::http`.
 
 use crate::core::config::EmailNotificationConfig;
 use crate::core::models::IncidentReport;
-use crate::notification::Notifier;
+use crate::notification::http::{read_line, start_tls};
+use crate::notification::{AlertNotice, Notifier};
 use anyhow::{anyhow, Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use serde::Serialize;
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::sync::Arc;
 use std::time::Duration;
 
 pub struct EmailNotifier {
@@ -34,7 +35,37 @@ impl EmailNotifier {
     }
 }
 
+impl EmailNotifier {
+    fn send(&self, subject: &str, body: &str) -> Result<()> {
+        match self.config.provider.as_str() {
+            "resend" => send_via_resend(&self.config, subject, body),
+            "smtp" | "" => send_via_smtp(&self.config, subject, body),
+            other => Err(anyhow!(
+                "unknown notification.email.provider '{other}' (expected \"smtp\" or \"resend\")"
+            )),
+        }
+    }
+}
+
 impl Notifier for EmailNotifier {
+    fn name(&self) -> &'static str {
+        "email"
+    }
+
+    fn notify_alert(&self, alert: &AlertNotice) -> Result<()> {
+        if !self.config.enabled {
+            return Ok(());
+        }
+        let subject = format!(
+            "[ServerSentinel] {} security alert on {} — {}",
+            alert.severity.as_str().to_uppercase(),
+            alert.host,
+            crate::util::truncate(&alert.title, 120)
+        );
+        let body = format!("ServerSentinel security alert\n\n{}\n", alert.text_body());
+        self.send(&subject, &body)
+    }
+
     fn notify(&self, report: &IncidentReport) -> Result<()> {
         if !self.config.enabled {
             return Ok(());
@@ -44,10 +75,22 @@ impl Notifier for EmailNotifier {
             "[ServerSentinel] {} INCIDENT on {} — {}",
             report.severity, report.server_name, report.incident_type
         );
+        let related: String = report
+            .related_activity
+            .iter()
+            .take(15)
+            .map(|r| format!("  {}  {}\n", r.ts.format("%H:%M:%S"), r.summary))
+            .collect();
+        let related = if related.is_empty() {
+            String::new()
+        } else {
+            format!("Changes and access in the lead-up to this incident:\n{related}\n")
+        };
         let body = format!(
             "ServerSentinel automated incident report\n\n\
              Server: {}\nIncident: {}\nSeverity: {}\nDuration: {}\n\n\
              Probable cause: {}\nConfidence: {:.0}%\nEvidence quality: {}\n\n\
+             {related}\
              Full JSON/HTML report is on the agent host under the configured\n\
              storage directory (incidents/{}.json, reports/{}.html).\n",
             report.server_name,
@@ -64,66 +107,8 @@ impl Notifier for EmailNotifier {
             report.incident_id,
         );
 
-        match self.config.provider.as_str() {
-            "resend" => send_via_resend(&self.config, &subject, &body),
-            "smtp" | "" => send_via_smtp(&self.config, &subject, &body),
-            other => Err(anyhow!(
-                "unknown notification.email.provider '{other}' (expected \"smtp\" or \"resend\")"
-            )),
-        }
+        self.send(&subject, &body)
     }
-}
-
-// ---------------------------------------------------------------------
-// Shared TLS plumbing
-// ---------------------------------------------------------------------
-
-fn tls_config() -> Arc<rustls::ClientConfig> {
-    let mut roots = rustls::RootCertStore::empty();
-    roots.add_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.iter().map(|ta| {
-        rustls::OwnedTrustAnchor::from_subject_spki_name_constraints(
-            ta.subject,
-            ta.spki,
-            ta.name_constraints,
-        )
-    }));
-    Arc::new(
-        rustls::ClientConfig::builder()
-            .with_safe_defaults()
-            .with_root_certificates(roots)
-            .with_no_client_auth(),
-    )
-}
-
-/// Wraps an already-connected `TcpStream` in TLS. Used both for a
-/// straight-to-TLS connection (Resend's HTTPS) and for a STARTTLS
-/// upgrade partway through an SMTP session (Gmail/SES).
-fn start_tls(tcp: TcpStream, host: &str) -> Result<rustls::StreamOwned<rustls::ClientConnection, TcpStream>> {
-    let server_name = rustls::ServerName::try_from(host)
-        .map_err(|_| anyhow!("'{host}' is not a valid DNS name for TLS"))?;
-    let conn = rustls::ClientConnection::new(tls_config(), server_name)
-        .context("starting TLS handshake")?;
-    Ok(rustls::StreamOwned::new(conn, tcp))
-}
-
-/// Reads one line at a time without over-buffering past a protocol phase
-/// boundary (important for SMTP: a `BufReader` could greedily read bytes
-/// belonging to the *next* phase — e.g. the TLS handshake right after
-/// STARTTLS — off the wire before we're ready for them).
-fn read_line<R: Read>(stream: &mut R) -> Result<String> {
-    let mut line = Vec::new();
-    let mut byte = [0u8; 1];
-    loop {
-        let n = stream.read(&mut byte).context("reading from socket")?;
-        if n == 0 {
-            break; // connection closed
-        }
-        line.push(byte[0]);
-        if byte[0] == b'\n' {
-            break;
-        }
-    }
-    Ok(String::from_utf8_lossy(&line).trim_end().to_string())
 }
 
 /// Reads a full (possibly multi-line, "250-...\r\n250 ...\r\n") SMTP
@@ -197,9 +182,25 @@ fn send_via_smtp(config: &EmailNotificationConfig, subject: &str, body: &str) ->
     tls.write_all(b"DATA\r\n")?;
     expect_smtp(&mut tls, 354, "DATA")?;
     let to_header = config.to_addresses.join(", ");
+    let domain = config.from_address.rsplit('@').next().unwrap_or("server-sentinel.local");
+    // Dot-stuffing (RFC 5321 4.5.2): a body line starting with "." must
+    // be escaped or the server treats it as end-of-data.
+    let body = body.replace("\r\n", "\n").replace('\n', "\r\n").replace("\r\n.", "\r\n..");
     let message = format!(
-        "From: {}\r\nTo: {}\r\nSubject: {}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n{}\r\n.\r\n",
-        config.from_address, to_header, subject, body
+        "From: {}\r\nTo: {}\r\nSubject: {}\r\nDate: {}\r\nMessage-ID: <{}@{}>\r\nMIME-Version: 1.0\r\n\
+         Content-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n{}\r\n.\r\n",
+        config.from_address,
+        to_header,
+        // RFC 2047: headers must be ASCII; subjects contain "—" etc.
+        if subject.is_ascii() {
+            subject.to_string()
+        } else {
+            format!("=?UTF-8?B?{}?=", BASE64.encode(subject))
+        },
+        chrono::Utc::now().to_rfc2822(),
+        uuid::Uuid::new_v4().simple(),
+        domain,
+        body
     );
     tls.write_all(message.as_bytes())?;
     expect_smtp(&mut tls, 250, "message body")?;

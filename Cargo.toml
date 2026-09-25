@@ -1,8 +1,10 @@
 [package]
 name = "server-sentinel"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
-description = "Lightweight infrastructure monitoring & automated incident investigation agent"
+description = "Single-binary server flight recorder: who got in, what they ran, what they changed, and whether it broke something"
+license = "GPL-3.0-or-later"
+rust-version = "1.86"
 authors = ["ServerSentinel"]
 
 [[bin]]
@@ -19,25 +21,27 @@ anyhow = "1"
 thiserror = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-uuid = { version = "=1.10.0", features = ["v4", "serde"] }
-ctrlc = "3"
-clap = { version = "=4.5.20", features = ["derive"] }
+uuid = { version = "1.10", features = ["v4", "serde"] }
+ctrlc = { version = "3", features = ["termination"] }
+clap = { version = "4.5", features = ["derive"] }
 
-# TLS + auth for the real email providers (Gmail/SES SMTP, Resend HTTPS).
-# Pinned to versions contemporaneous with the sandbox's rustc 1.75 for the
-# same reason as the pins below — see the note further down.
+# TLS for email (Gmail/SES SMTP, Resend HTTPS) and webhook notifiers.
+# Kept on the rustls 0.21 API the hand-rolled TLS plumbing was written and
+# verified against (notification/http.rs); bump deliberately, not by accident.
 rustls = { version = "=0.21.11", default-features = false, features = ["tls12", "logging"] }
 webpki-roots = "=0.25.4"
 base64 = "=0.21.7"
 
-# The sandbox toolchain is pinned to rustc 1.75 (Ubuntu apt has no newer
-# rustc available). Several transitive deps have since bumped their MSRV
-# past what 1.75 supports (edition2024 etc). Pin the offending transitive
-# crates to the last versions that still build on 1.75; harmless for a
-# real deployment on a current toolchain, where these pins can be dropped.
-indexmap = "=2.2.6"
-hashbrown = "=0.14.5"
-getrandom = "=0.2.15"
+# Security telemetry: embedded event store, file integrity monitoring,
+# diffs of previous file content, log / Windows event parsing.
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+notify = "8.2.0"
+sha2 = "0.11.0"
+hex = "0.4.3"
+similar = "3.2.0"
+flate2 = "1.1.10"
+regex = "1.13.1"
+quick-xml = "0.42.0"
 
 [profile.release]
 opt-level = 3
@@ -45,3 +49,13 @@ lto = true
 codegen-units = 1
 panic = "abort"
 strip = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2.189"
+
+[target."cfg(windows)".dependencies]
+windows-service = "0.8.1"
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_RemoteDesktop"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"

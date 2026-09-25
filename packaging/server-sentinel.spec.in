@@ -33,14 +33,14 @@ mkdir -p %{buildroot}/var/lib/server-sentinel/incidents
 mkdir -p %{buildroot}/var/lib/server-sentinel/reports
 
 install -m 755 server-sentinel %{buildroot}/usr/bin/server-sentinel
-install -m 644 server-sentinel.toml %{buildroot}/etc/server-sentinel/server-sentinel.toml
+install -m 600 server-sentinel.toml %{buildroot}/etc/server-sentinel/server-sentinel.toml
 install -m 644 server-sentinel.service %{buildroot}/usr/lib/systemd/system/server-sentinel.service
 
 %files
 /usr/bin/server-sentinel
 %config(noreplace) /etc/server-sentinel/server-sentinel.toml
 /usr/lib/systemd/system/server-sentinel.service
-%dir /var/lib/server-sentinel
+%dir %attr(700,root,root) /var/lib/server-sentinel
 %dir /var/lib/server-sentinel/incidents
 %dir /var/lib/server-sentinel/reports
 

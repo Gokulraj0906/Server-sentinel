@@ -1,332 +1,333 @@
-# ServerSentinel — Agent (MVP)
+# ServerSentinel
 
-Lightweight Linux monitoring agent that watches CPU, memory and disk, and
-when a resource sustains a critical level, automatically switches into a
-faster-sampling **investigation mode**, correlates the culprit process,
-scores a root cause, and writes a JSON + HTML incident report — with zero
-manual triage. This is the MVP scope recommended by the FRD (section 41):
-one full, working investigation cycle end-to-end, architected so the rest
-of the roadmap (Windows collectors, a central server/dashboard, a
-database backend, more notification channels) slots in without a rewrite.
+**A flight recorder for your servers.** One 6 MB binary per host, no central server, no
+cluster to run. It answers the four questions every incident review and every audit comes back to:
 
-## What's implemented
+1. **Who got in?** SSH, RDP and console sessions: user, source IP, auth method, key fingerprint,
+   start/end. Brute force, password spraying, and the one that matters most: *a login that
+   succeeded after failures*.
+2. **What did they run?** Every command, attributed to the session and the *human* who ran it,
+   including through `sudo`/`su`. Linux uses the kernel's exec notifications, so sub-second
+   commands aren't missed.
+3. **What did they change, and what was it before?** File integrity monitoring that keeps the
+   previous content of every config, with diffs, plus package installs/upgrades, service changes,
+   and new accounts and admins.
+4. **Did it break something?** When CPU, memory or disk saturates, ServerSentinel investigates
+   the culprit process, then looks back through the change history and tells you what changed
+   right before.
 
-| FRD requirement | Status |
-|---|---|
-| FR-001–004 CPU/Memory/Disk/Process telemetry | ✅ (Linux, via `sysinfo`) |
-| Network telemetry | ✅ collected; not yet used in correlation (see Limitations) |
-| FR-005–007 Threshold detection + debounce | ✅ |
-| FR-008 Investigation mode (faster sampling) | ✅ |
-| FR-009 Pre-incident ring buffer + post-recovery window | ✅ |
-| FR-010 Investigation engine | ✅ |
-| FR-011 Process correlation | ✅ |
-| FR-012–014 Root cause scoring, confidence, evidence quality | ✅ |
-| FR-015 Timeline | ✅ |
-| FR-016 Incident report (JSON + HTML) | ✅ |
-| FR-017 Notifications | ✅ console; ✅ email (plain SMTP, no STARTTLS/AUTH — see below) |
-| FR-018 TOML configuration | ✅ |
-| FR-019 Local file storage (`incidents/*.json`, `reports/*.html`) | ✅ |
-| FR-020 Platform abstraction (trait-based collectors) | ✅ Linux **and** Windows both shipped |
-| FR-023 Graceful degradation per failing collector | ✅ |
-| Central server, dashboard, DB backend, AI layer | ❌ out of scope for this build — see Roadmap |
+Example (illustrative data):
+
+```text
+$ server-sentinel sessions
+SESSION         USER     VIA   FROM           START                DURATION  STATUS  CMDS SUDO FILES ALERTS RISK
+S260925-3fa9c2  alice    ssh   203.0.113.9    2026-09-25 14:02:11    29m 4s  ended     23    3     1      1   40
+
+$ server-sentinel session S260925-3fa9c2
+Session S260925-3fa9c2  —  alice via SSH from 203.0.113.9 port 50122
+  Auth:      publickey  key SHA256:AbCdEf0123…
+  When:      2026-09-25 14:02:11 → 14:31:15  (29m 4s)  ended — logoff
+  Activity:  23 commands, 3 privileged, 1 file changes, 1 alerts   risk 40/100
+
+  14:02:11  ● alice logged in via SSH from 203.0.113.9 (publickey)            #8812
+  14:02:30  $ vim /etc/nginx/nginx.conf   (in /home/alice)                     #8815
+  14:03:02  ✎ Modified /etc/nginx/nginx.conf (+1 -1)                          #8821
+            attribution: high — `vim` referenced this path
+  14:03:10  # alice ran as root: /usr/bin/systemctl reload nginx               #8823
+  …
+
+$ server-sentinel diff 8821
+-    worker_connections 1024;
++    worker_connections 64;
+```
+
+…and four minutes later, the incident report for the CPU spike says:
+
+> **What changed before this incident.** 3m 58s before onset: *Modified /etc/nginx/nginx.conf
+> (+1 −1) by alice* (session S260925-3fa9c2).
+
+## Why another tool?
+
+| | ServerSentinel | Wazuh / OSSEC | Splunk / Elastic | Teleport | osquery |
+|---|---|---|---|---|---|
+| Infrastructure to run | none (1 binary per host) | manager + indexer + dashboard | cluster, or per-GB SaaS | proxy + auth service | fleet manager to be useful at scale |
+| Direct SSH/RDP logins (not via a proxy) | ✅ | ✅ | if you build the parsing | ❌ only sessions through its proxy | partial (`last`, event tables) |
+| Commands grouped into the *human's* session | ✅ out of the box | with auditd rules you write | if you build it | ✅ for proxied sessions | per-process (`process_events`), no session view |
+| File changes with previous content and diffs | ✅ by default | opt-in (`report_changes`) | ❌ | ❌ | ❌ hashes/paths only |
+| "What changed right before this outage?" | ✅ in every incident report | ❌ | manual correlation | ❌ | ❌ |
+| Linux and Windows, one data model | ✅ | ✅ | ✅ | ✅ (Windows via RDP proxy) | ✅ |
+| Before it's useful | install, run `doctor` | rule tuning to cut noise | build parsing, dashboards, alerts | route all access through it | write queries |
+
+ServerSentinel doesn't replace your SIEM. It gives your SIEM its best-structured source (see
+[Forwarding](#forwarding-to-your-siem)), and if you don't have a SIEM, it's the part of one a small
+team actually uses.
+
+## Install
+
+**Linux** (`.deb` / `.rpm`, systemd):
+
+```bash
+sudo dpkg -i server-sentinel_0.2.0_amd64.deb      # or: sudo rpm -i server-sentinel-0.2.0-1.x86_64.rpm
+sudo systemctl enable --now server-sentinel
+sudo server-sentinel doctor                       # what this host can and can't be audited for
+```
+
+**Windows** (run from an elevated prompt; the Security event log needs LocalSystem):
+
+```powershell
+server-sentinel.exe --config "C:\Program Files\server-sentinel\server-sentinel.toml" service install
+server-sentinel.exe doctor
+```
+
+The service starts automatically, restarts on failure, and logs to
+`C:\ProgramData\ServerSentinel\logs\server-sentinel.log`. On Windows, enable
+*Audit Process Creation* to capture every process, even sub-second ones; `doctor` prints the exact
+`auditpol` command. Without it, the agent polls the process table and ties each process to its
+RDP/console session.
+
+**From source:** `cargo build --release` (Rust 1.86+). No OpenSSL or system libraries needed;
+SQLite is compiled in.
+
+## Investigating
+
+Every command reads the local store, so it's safe to run on a live host while the agent writes.
+
+```bash
+server-sentinel sessions [--active] [--user alice] [--since 7d]
+server-sentinel session <ID> [--diffs] [--html report.html] [--json]
+server-sentinel changes [--path nginx] [--since 24h]
+server-sentinel diff <EVENT_ID> [--before | --after]      # the diff, or the whole file as it was
+server-sentinel alerts [--min high] [--since 7d]
+server-sentinel search <QUERY> [--since 24h] [--json]
+server-sentinel verify                                     # tamper check, exit code 1 on failure
+server-sentinel doctor
+```
+
+**Search** takes `field=value` terms (wildcards with `*`, `!=` to exclude) plus free text, which is
+matched as a substring against messages, command lines and paths:
+
+```bash
+server-sentinel search user=alice action=file.*
+server-sentinel search ip=203.0.113.9 --since 30d
+server-sentinel search category=process "curl" sev>=medium
+server-sentinel search session=S260925-3fa9c2 path!=/tmp/*
+```
+
+Fields: `user`, `ip`, `action`, `category`, `session`, `path`/`target`, `process`, `command`, `pid`,
+`host`, `outcome`, `id`, `sev>=`.
+
+## What's recorded
+
+| | Linux | Windows |
+|---|---|---|
+| Access | sshd (incl. OpenSSH ≥ 9.8 `sshd-session`), console `login`, from `auth.log`/`secure`/journald | Security 4624/4625/4634/4647, TerminalServices 21/23/24/25 (RDP connect/disconnect/reconnect), Win32-OpenSSH log |
+| Already-open sessions at startup | `who -u` (utmp) | Terminal Services session enumeration |
+| Commands | kernel proc connector (every `exec`), falling back to `/proc` polling; `loginuid`, audit session, TTY and pid ancestry for attribution | Security 4688 when enabled, else process polling + TS session id |
+| Privilege | `sudo` (incl. denials), `su` | linked/elevated logons |
+| Accounts | `useradd`, `userdel`, `usermod`/`gpasswd` group adds, `passwd` | 4720–4726, 4728/4732/4756, 4740 |
+| Files | inotify + startup/periodic rescans, content history | ReadDirectoryChangesW + rescans, content history |
+| Packages | `dpkg.log`, `dnf.rpm.log` | MsiInstaller 1033/1034 |
+| Services / persistence | systemd state changes | SCM state changes, 7045 service installed, 4698 scheduled task |
+| Tampering | auth log truncated in place, agent downtime | 1102 Security log cleared, 104 |
+
+Changes made **while the agent was stopped** are still caught: the file baseline is re-verified at
+startup, and log and event-log positions resume where they left off.
+
+## Detection
+
+Built-in rules, each firing once per cooldown window rather than once per event, and each saying
+why it fired:
+
+- **Brute force** and **password spraying** per source address
+- **Login succeeded after failures** from the same address (*critical*)
+- **Login from a new address** for an account (after a baseline is established)
+- **Direct root / Administrator login** over SSH/RDP
+- **Off-hours logins** (opt-in: `business_hours = "08:00-19:00"`)
+- **Web server spawned a shell** (nginx/apache/php-fpm/w3wp → sh/bash/cmd/powershell)
+- **Suspicious commands**: download-and-execute, reverse shells, encoded PowerShell, history
+  wiping, disabling security tools, credential dumping (mimikatz, LSASS dumps), shadow-copy
+  deletion, miners
+- **Sensitive files**: `sudoers`, `authorized_keys`, `sshd_config`, `/etc/passwd`, PAM, cron,
+  systemd units, `ld.so.preload`, Windows Startup folder, `hosts`…
+- **Account changes**: new users, users added to admin groups
+- **Log tampering**: Security log cleared, auth log truncated, `wevtutil cl`
+
+Your own rules and suppressions are plain field matches in the config, with no DSL:
+
+```toml
+[[security.rules.custom]]
+id = "prod-db-config"
+description = "Production database configuration changed"
+severity = "high"
+action = "file.*"
+target = "/etc/postgresql/*"
+
+[[security.rules.suppress]]      # the events are still recorded; only the alert is silenced
+rule = "encoded_exec"
+parent = "ansible*"
+reason = "Ansible uses encoded PowerShell over WinRM"
+```
+
+Alerts go to the console, email (SMTP/Gmail/SES/Resend) and webhooks (Slack, Discord, Teams
+Workflows, generic JSON) at or above `notification.min_alert_severity`. Notifications are capped at
+30 per hour, so an attack can't flood your pager, and every alert stays searchable.
+
+## Forwarding to your SIEM
+
+```toml
+[forward.ndjson]       # one JSON event per line, rotated; point Splunk UF / Filebeat / Vector / Fluent Bit at it
+enabled = true
+
+[forward.syslog]       # RFC 5424 over UDP or TCP (octet-counted), JSON body
+enabled = true
+address = "tcp://siem.internal:6514"
+min_severity = "info"
+```
+
+Forwarding also protects the audit trail: root can delete the local database, but not what has
+already left the host.
+
+## Trust and privacy
+
+The agent records what people type, so it's built not to become the most valuable file on the box:
+
+- **Secrets are redacted before storage**: passwords and tokens in command lines (`mysql -p…`,
+  `--password`, `API_KEY=`, `https://user:pass@`, bearer tokens, cloud keys) and in captured config
+  content. Private keys, `shadow` and `.env` files are tracked by hash only (`content_exclude`).
+- **Tamper evidence**: every event is hash-chained; `server-sentinel verify` detects any edited or
+  deleted row. This proves the trail wasn't quietly altered. It can't stop root from deleting the
+  whole database, which is what forwarding is for.
+- **Coverage gaps are reported**: if the agent was killed or offline, the next start records
+  roughly how long, and whether it stopped cleanly.
+- **Least privilege where it's free**: the systemd unit is read-everything / write-only-its-own-dir
+  (`ProtectSystem=strict`), and memory and CPU are capped. The database and config are root-only
+  (0600/0700).
+- **Command capture can be turned off** (`capture_command_lines = false`) where policy requires it.
+
+## Footprint
+
+Measured on an 8-core Windows 11 desktop with 314 running processes, with process-table polling every second (the Windows fallback when 4688 auditing is off) and metrics every 2 s: **6.3 MB** release binary, **~23 MB** private memory (35 MB working set), **~4.6% of one core**. On Linux with the kernel proc connector there is no process polling at all. Not yet measured on a busy production server; the systemd unit caps the agent at 512 MB and 50% of a core regardless. Everything is bounded: the event channel, alert
+state, learned session keys, stored command lines (8 KB), file content (256 KB per file) and
+retention (30 days by default).
 
 ## Architecture
 
+```text
+                      ┌──────────── performance ─────────────┐
+metrics collectors ──►│ detection → investigation → report   │──┐  "what changed
+                      └──────────────────────────────────────┘  │   before this?"
+audit collectors ───► security pipeline ───► event store (SQLite) ◄┘
+ auth logs / journald   hold & reorder,        hash chain, FTS,
+ Windows event log      redaction, sessions,   file history
+ exec (netlink/proc)    attribution, rules  ──► NDJSON / syslog
+ FIM, packages                              ──► console / email / webhook
 ```
+
+```text
 src/
-  core/          shared models, TOML config, ring buffer
-  collectors/    trait definitions only (platform-agnostic)
-  platform/
-    common.rs    CPU/memory/disk/network/process collectors — OS-agnostic,
-                 backed by `sysinfo` (which abstracts Linux/Windows itself)
-    linux/       Linux-only piece: service state via `systemctl`
-    windows/     Windows-only piece: service state via PowerShell `Get-Service`
-  detection/     threshold + debounce -> alert levels, trigger decisions
-  incident/      the incident state machine, timeline, evidence assembly
-  investigation/ evidence-window assembly + process correlation
-  rootcause/     confidence scoring (conservative: reports UNKNOWN rather
-                 than guessing when evidence is weak)
-  reporting/     JSON serialization + hand-written HTML report renderer
-  storage/       writes incidents/*.json and reports/*.html
-  notification/  Notifier trait; console (always on) + email (opt-in)
-  main.rs        wires it all into the monitor/detect/investigate loop
+  events/        unified event model (ECS-style fields) + bus
+  audit/         collectors: authlog, journald, tail, linux_proc, windows, winevent, fim, packages, discovery
+  security/      pipeline, sessions (attribution keys), rules, attribution, redaction
+  storage/       event_store (SQLite: events, sessions, blobs, FIM baseline), incident_store
+  incident/      performance incident state machine + related (change correlation)
+  detection/, investigation/, rootcause/   performance detection and root-cause scoring
+  notification/  console, email, webhook (async worker, rate-limited)
+  forward/       NDJSON, syslog
+  cli.rs, query.rs   investigation commands and search language
 ```
 
-The state machine implemented in `incident::manager`:
+Session attribution works through lookup keys. A login opens a session carrying keys such as the
+sshd pid, or a Windows logon or Terminal Services session ID. Each process carries its ancestor
+pids, Linux audit session ID, TTY or TS session. The pipeline matches them, and a resolved process
+teaches the session its own pid, so its children resolve too. Events are held for two seconds and
+processed in timestamp order, because the exec notification for a shell usually arrives *before*
+the sshd log line that created its session.
 
-```
-Normal (sampling every normal_interval_seconds)
-   │  resource sustains >= critical threshold for trigger_duration_seconds
-   ▼
-Investigation (sampling every investigation_interval_seconds)
-   │  resource drops below critical threshold for recovery_duration_seconds
-   ▼
-Post-recovery evidence window (post_recovery_seconds)
-   │
-   ▼
-Correlation -> Root cause scoring -> Report (JSON + HTML) -> Notify -> Normal
-```
+## Known limitations
+
+Documented rather than hidden:
+
+- **File-change attribution is inferred, not proven.** inotify and ReadDirectoryChangesW don't say
+  which process wrote a file. Attribution comes from correlating recent commands (`vim /etc/x`,
+  `sed -i … x`) and is always labelled `high` / `medium` / `low` / `none` with the reason. Exact
+  attribution needs kernel audit hooks (fanotify/eBPF, or Windows SACL auditing), which are on the
+  roadmap.
+- **Linux without root, in a container, or under WSL** can't use the proc connector (the kernel
+  only delivers exec notifications to the host network namespace). The agent detects this at
+  startup and falls back to 1-second `/proc` polling, which misses very short commands. `sudo`
+  commands are still captured in full from the auth log. The proc connector path itself has been
+  unit-tested against the kernel wire format but not yet run on a bare-metal or VM host.
+- **Windows without 4688 auditing** also polls, so sub-second processes can be missed. `doctor`
+  shows how to enable it.
+- **Windows event log is read by polling `wevtutil`** every 2 s, not through a push subscription.
+  Nothing is lost (it resumes by record ID), but latency is seconds.
+- **RDP client IPv6 addresses** aren't shown for sessions discovered at startup; logons seen live
+  via event 4624/21 include them.
+- **The MSI doesn't register the service yet.** Run `service install` after installing (see
+  [Install](#install)).
+- **No central console yet.** Every host is self-contained; aggregate with forwarding for now.
+- **Retention is by age only** (default 30 days), not by size.
+
+## Editions
+
+ServerSentinel is open core. The agent — everything in this repository — is and stays **GPL-3.0**
+open source: all collectors, rules, the local store and CLI, forwarding and notifications. A hosted
+fleet console (multi-host search, long retention, SSO/RBAC, compliance evidence exports) is planned
+as a paid, separately licensed service built on the same event format.
+
+---
 
 ## Packaging
 
-**Linux (`.deb` / `.rpm`) — built and verified in this repo's own dev
-environment**: installed the `.deb` with `dpkg -i`, confirmed the binary
-runs from `/usr/bin`, and purged it cleanly with `dpkg -P`.
+**Linux (`.deb` / `.rpm`):**
 
 ```bash
 bash packaging/build-deb.sh   # -> pkg/deb/server-sentinel_<ver>_amd64.deb
 bash packaging/build-rpm.sh   # -> pkg/rpm/server-sentinel-<ver>-1.x86_64.rpm
 ```
 
-Both install the binary to `/usr/bin/server-sentinel`, config to
-`/etc/server-sentinel/server-sentinel.toml` (preserved on upgrade,
-removed only on `dpkg -P` / full `rpm -e`), a systemd unit, and create
-`/var/lib/server-sentinel/{incidents,reports}`.
+Both install `/usr/bin/server-sentinel`, the config at `/etc/server-sentinel/server-sentinel.toml`
+(mode 0600, preserved on upgrade), a hardened systemd unit, and `/var/lib/server-sentinel`
+(mode 0700).
 
-**Windows (`.msi` / `.exe`)** — built via CI on a real `windows-latest`
-runner (`.github/workflows/release.yml`), including a custom installer
-wizard page (`wix/main.wxs`, hand-authored — see "WiX installer wizard"
-below) that asks for email settings during setup and writes them
-straight into the installed config file.
-
-**Important**: unlike the `.deb`/`.rpm`, I could not actually run and
-verify the Windows/MSI leg of that workflow — I wrote it against the
-standard `cargo-wix` recipe used by other Rust CLI projects, but you
-should do one test run (`workflow_dispatch` or a throwaway `v0.0.0-test`
-tag) and check the generated `.msi` actually installs before relying on
-it for a real release.
+**Windows (`.msi` / `.exe`):** built in CI on `windows-latest` (`.github/workflows/release.yml`),
+with an installer page that asks for email settings (`wix/main.wxs`). The MSI has not been
+click-tested on a real machine; test-install it before a real release.
 
 ```bash
-git push origin main
-git tag v0.1.0 && git push origin v0.1.0   # triggers the release workflow
+git tag v0.2.0 && git push origin v0.2.0   # triggers the release workflow
 ```
-
-## Building
-
-Requires a Rust toolchain (edition 2021). Tested against rustc 1.75+.
-
-```bash
-cargo build --release
-./target/release/server-sentinel --config config/server-sentinel.toml
-```
-
-> **Note on `Cargo.toml` version pins.** This was built in a sandbox
-> limited to rustc 1.75 (no newer toolchain available via `apt`), while
-> several transitive crates (`clap`, `uuid`, `indexmap`/`hashbrown`,
-> `getrandom`) have since bumped their MSRV to require Rust's 2024
-> edition. The pins in `Cargo.toml` (`clap = "=4.5.20"`, `uuid =
-> "=1.10.0"`, `indexmap = "=2.2.6"`, `hashbrown = "=0.14.5"`,
-> `getrandom = "=0.2.15"`) keep the build working on 1.75. **On a
-> current toolchain (1.85+) these pins can simply be deleted** to pick up
-> the latest versions.
-
-## Code signing (fixes "Unknown publisher" / SmartScreen)
-
-Windows shows that warning because the `.msi`/`.exe` aren't digitally
-signed. There is **no free option that works for public/customer
-distribution** — this needs an honest budget line if you're shipping this
-commercially:
-
-| Option | Cost | Result |
-|---|---|---|
-| Self-signed cert | Free | Still triggers SmartScreen for anyone who hasn't manually trusted your cert — only useful if you control every install target directly (e.g. push trust via your own team's GPO) |
-| [SignPath.io OSS program](https://signpath.io/oss) | Free | Only if this project is public/open-source and accepted into their program |
-| Standard (OV) code signing cert (Sectigo/SSL.com/DigiCert) | ~$100–400/yr | Real publisher name; SmartScreen still shows a milder warning until the file builds download "reputation" (can take weeks) |
-| EV code signing cert | ~$300–600/yr, needs a hardware token | Only option with **immediate** SmartScreen trust, no reputation wait |
-
-**Once you have a certificate** (a `.pfx` file + its password), set it up:
-```bash
-base64 -w0 your-cert.pfx > cert.b64   # or: certutil -encode on Windows
-```
-Then in your GitHub repo: **Settings → Secrets and variables → Actions**,
-add:
-- `WINDOWS_CERTIFICATE_BASE64` — contents of `cert.b64`
-- `WINDOWS_CERTIFICATE_PASSWORD` — the `.pfx` password
-
-The release workflow already has signing steps wired in (`signtool.exe`,
-present on `windows-latest` runners) — they check for these secrets and
-sign the `.exe` and `.msi` automatically if present, or skip cleanly (no
-build failure) if not. Nothing else to change once the secrets are set.
 
 ## Email notifications
 
-Two real providers, selected via `[notification.email] provider`:
+`[notification.email] provider`:
 
-**`provider = "smtp"`** — authenticated SMTP with STARTTLS + AUTH LOGIN.
-This is the *same protocol* for Gmail and AWS SES; only host/credentials differ.
+- **`smtp`**: STARTTLS + AUTH LOGIN. Gmail: `smtp.gmail.com:587`, your address, and an
+  [App Password](https://myaccount.google.com/apppasswords) (requires 2-Step Verification). AWS
+  SES: `email-smtp.<region>.amazonaws.com:587` with the SES-generated SMTP credentials, *not*
+  your AWS access keys.
+- **`resend`**: Resend's HTTPS API with `resend_api_key`.
 
-- **Gmail**: `smtp_host = "smtp.gmail.com"`, `smtp_port = 587`.
-  `smtp_username` = your full Gmail address. `smtp_password` = an **App
-  Password**, not your normal password — turn on 2-Step Verification,
-  then generate one at https://myaccount.google.com/apppasswords.
-- **AWS SES**: `smtp_host = "email-smtp.<your-region>.amazonaws.com"`,
-  `smtp_port = 587`. `smtp_username`/`smtp_password` = the credentials
-  from SES console → **SMTP settings** → **Create SMTP credentials** —
-  these are a separate generated pair, **not** your AWS access key/secret.
+Prefer environment variables over the config file for secrets: `SENTINEL_SMTP_PASSWORD`,
+`SENTINEL_RESEND_API_KEY`, `SENTINEL_WEBHOOK_URL`. The agent warns at startup if a config file
+containing credentials is readable by other users.
 
-**`provider = "resend"`** — Resend's HTTPS API. Get a key (free tier
-available) at https://resend.com/api-keys, set `resend_api_key`.
+## Code signing (fixes "Unknown publisher" / SmartScreen)
 
-TLS is hand-rolled on `rustls` (no OpenSSL dependency, so this works the
-same way regardless of what's installed on the host). **Caveat on
-verification**: I validated the TLS/handshake code against a reachable
-HTTPS host from this dev sandbox and confirmed it completes a real
-TLS handshake correctly — but the sandbox's own network sits behind a
-TLS-intercepting proxy, so I could not complete an actual end-to-end
-send against live Gmail/SES/Resend. Test a real incident notification
-against your actual provider before relying on it.
+The release workflow signs the `.exe` and `.msi` when `WINDOWS_CERTIFICATE_BASE64` and
+`WINDOWS_CERTIFICATE_PASSWORD` secrets are set, and skips signing cleanly otherwise. Options:
+self-signed (only for machines you control), [SignPath.io OSS](https://signpath.io/oss) (free for
+accepted open-source projects), OV certificate (~$100–400/yr, SmartScreen reputation builds over
+weeks), EV certificate (~$300–600/yr, immediate trust).
 
-## WiX installer wizard (email settings during setup)
+## Development
 
-`wix/main.wxs` adds one extra page to the standard installer wizard,
-between feature selection and the final confirm screen, that asks for:
-enable email (checkbox), provider (SMTP vs Resend radio buttons), and
-the relevant host/username/password or API key, plus from/to addresses.
-On finishing setup, those answers are written directly into
-`server-sentinel.toml` in the install directory via WiX's `IniFile`
-mechanism — no manual config editing needed for the common case.
-
-**This is the single least-verified piece of this entire project — read
-this before trusting it.** I have no access to a Windows machine, so I
-could not run the installer and watch the dialog actually appear or
-click through it. What I *can* say with confidence:
-- The file is well-formed XML (checked)
-- Everything outside the custom dialog follows cargo-wix's own real
-  template (fetched directly from its source, not reconstructed from
-  memory) — so the base install (files, PATH entry, uninstall) should be
-  as reliable as any standard cargo-wix installer
-- The custom dialog and its hook into the wizard's Back/Next sequence
-  uses a well-documented WiX pattern (overriding a `Publish` `NewDialog`
-  event with a higher `Order`) — but "well-documented" isn't "tested by
-  me on this exact file"
-
-**What to check on your first real Windows test:**
-1. Does the "Email Notifications" page actually appear after feature
-   selection?
-2. Does the SMTP/Resend field set correctly toggle when you click the
-   other radio button?
-3. Does Back/Next navigation around that page work, or does it skip/loop?
-4. After install, open the installed `server-sentinel.toml` and confirm
-   the `[notification.email]` section has your entered values, correctly
-   quoted, with no duplicate keys.
-
-If any of those fail, send me exactly what happened (a screenshot or the
-behavior) the same way you did for the `cargo wix build` and
-`config-sample` issues — I'll fix it the same way: precisely, from your
-actual observed failure, rather than guessing again blind.
-
-## Configuration
-
-`config/server-sentinel.toml` is created with defaults on first run if it
-doesn't exist. Key sections:
-
-```toml
-[thresholds]
-cpu_warning = 80.0
-cpu_critical = 90.0
-memory_warning = 80.0
-memory_critical = 90.0
-disk_warning = 80.0
-disk_critical = 90.0
-
-[incident]
-trigger_duration_seconds = 10   # sustained-critical debounce (FR-007)
-pre_incident_seconds = 120      # ring buffer retention before an incident
-post_recovery_seconds = 30      # extra evidence collected after recovery
-recovery_duration_seconds = 5   # sustained-recovered debounce
-
-[notification.email]
-enabled = false                 # opt-in; see Limitations below
+```bash
+cargo test                     # 58 tests on Windows and Linux; parsers use real log and event fixtures
+cargo clippy --all-targets
+cargo run -- --config config/server-sentinel.toml run
 ```
 
-## Running as a service
+## License
 
-```ini
-# /etc/systemd/system/server-sentinel.service
-[Unit]
-Description=ServerSentinel monitoring agent
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=/opt/server-sentinel/server-sentinel --config /opt/server-sentinel/config/server-sentinel.toml
-WorkingDirectory=/opt/server-sentinel
-Restart=on-failure
-RestartSec=5
-User=root
-# journald captures stdout/stderr (agent logs there); use `journalctl -u
-# server-sentinel` for rotation/retention rather than a file appender.
-
-[Install]
-WantedBy=multi-user.target
-```
-
-## Known limitations (be aware of these before calling this "done")
-
-- **Windows service collector needs PowerShell on PATH** (standard on
-  every supported Windows Server release). Per-process disk I/O via
-  `sysinfo` on Windows may read as zero unless the agent runs elevated —
-  a documented `sysinfo`/Windows API limitation, not specific to this code.
-- **No per-process network attribution.** Network incidents are detected
-  (interfaces are collected) but correlation currently only scores
-  process-level CPU/memory/disk I/O; a network incident will report
-  UNKNOWN with LOW evidence quality rather than guessing.
-- **Per-volume disk throughput is approximated.** The OS doesn't expose
-  portable per-mount-point read/write rates; `total_read_bytes_per_sec`
-  is a system-wide sum of process I/O deltas, which is accurate in
-  aggregate but not split by volume.
-- **Email delivery not end-to-end verified** — the STARTTLS+AUTH (Gmail/
-  SES) and Resend HTTPS code paths were validated structurally (compiles,
-  correct protocol sequencing, TLS handshake logic proven against a
-  reachable host) but not against a live Gmail/SES/Resend account, since
-  this dev sandbox's network sits behind a TLS-intercepting proxy. Send a
-  real test incident through your actual provider before relying on it.
-- **MSI install not end-to-end verified** — the `.msi` was inspected
-  (valid WiX-built installer database, correct metadata) but not
-  installed on a real Windows machine. Confirm it actually installs,
-  runs, and uninstalls cleanly before shipping it to anyone.
-- **No code-signing certificate by default.** The `.exe`/`.msi` will
-  show "Unknown publisher" / SmartScreen warnings until you provide a
-  certificate — see "Code signing" above. This is a real cost for
-  commercial distribution, not something free.
-- **No central server, dashboard, or database.** Storage is local
-  files (FR-019's Phase 1 architecture). Multi-server aggregation and a
-  web UI are explicitly later-phase items in the FRD, not attempted here.
-- **No AI/LLM-assisted root cause.** Root cause is deterministic
-  statistical correlation (ramp-up + recovery decay + contention share),
-  intentionally conservative — it says UNKNOWN rather than fabricating a
-  cause when the evidence is thin.
-- **Container/quota disk-usage quirk.** In a containerized environment
-  with a storage quota, `statvfs`-reported `total_space` can reflect the
-  underlying filesystem rather than the quota, making `used_percent`
-  look inflated. This does not occur on a normal (non-quota'd) Linux
-  server — the formula matches how `df` and most Linux monitoring tools
-  compute usage.
-- **No automated tests yet.** The system was validated by hand (see
-  below) rather than a `#[test]` suite — worth adding before production
-  rollout.
-
-## Validation performed
-
-Built and ran in this sandbox end-to-end: started the agent with an
-aggressive CPU threshold, generated real CPU load with `yes`, and
-confirmed the full cycle — detection → investigation mode → correlation
-→ root-cause scoring → JSON/HTML report → console notification — fires
-correctly and identifies the actual culprit process with an honest
-confidence score. An earlier version of the correlation formula
-mis-attributed the incident to an unrelated near-zero-activity process;
-this was caught during testing and fixed (see `investigation/correlation.rs`,
-`MIN_SHARE_TO_CONSIDER`) by requiring a minimum contention share before a
-process is considered a candidate at all.
-
-## Roadmap (not attempted here — see Limitations)
-
-1. Central API server + multi-agent aggregation + web dashboard
-2. Database backend (Postgres/etc.) replacing local file storage
-3. Additional notification channels (Slack/Teams/webhooks) behind the
-   existing `Notifier` trait
-4. Automated remediation / runbooks
-5. Broader correlation inputs (per-process network, container/cgroup
-   awareness, log correlation)
-6. Windows: richer service metadata (start type, recovery actions) and
-   elevated-mode per-process disk I/O
+GPL-3.0-or-later. See [LICENSE.txt](LICENSE.txt).
